@@ -1,0 +1,10 @@
+build:linux:
+  stage: build
+  image: nvfbc
+  script:
+    - export LDFLAGS=-static-libgcc
+    - meson --buildtype=release --strip build
+    - ninja -C build
+  artifacts:
+    paths:
+      - build/libobs-nvfbc.so
