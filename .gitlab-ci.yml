@@ -1,10 +1,29 @@
+stages:
+  - build_image
+  - build
+
+build:linux_image:
+  stage: build_image
+  image: docker:git
+  services:
+    - docker:dind
+  script:
+    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN registry.gitlab.com
+    - docker build -t registry.gitlab.com/fzwoch/obs-nvfbc .
+    - docker push registry.gitlab.com/fzwoch/obs-nvfbc
+  only:
+    refs:
+      - master
+    changes:
+      - Dockerfile
+
 build:linux:
   stage: build
-  image: nvfbc
+  image: registry.gitlab.com/fzwoch/obs-nvfbc
   script:
     - export LDFLAGS=-static-libgcc
     - meson --buildtype=release --strip build
     - ninja -C build
   artifacts:
     paths:
-      - build/libobs-nvfbc.so
+      - build/nvfbc.so
