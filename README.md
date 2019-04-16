@@ -6,7 +6,7 @@ OBS Studio source plugin using NVIDIA's FBC API for Linux.
 
 **NVIDIA Linux drivers 410.66 or newer**
 
-> **IMPORTANT:** This plugin will **_NOT_** work with your regular NVIDIA **GeForce** graphics cards! The following NVIDIA GPUs are supported. This won't change unless NVIDIA releases an updated driver which allows running on other GPUs as well (or so..).
+> **IMPORTANT:** This plugin will **_NOT_** work with your regular **NVIDIA GeForce** graphics cards! The following NVIDIA GPUs are supported. This won't change unless NVIDIA releases an updated driver which allows running on other GPUs as well (or so..).
 
 | Quadro Desktop | Quadro Mobile | Tesla
 |----------------|---------------|------
