@@ -5,7 +5,7 @@ shared_library('nvfbc', 'nvfbc.c',
     dependencies : [
         dependency('threads'),
         meson.get_compiler('c').find_library('obs'),
-        meson.get_compiler('c').find_library('dl', required : false),
+        meson.get_compiler('c').find_library('dl'),
     ],
     install : true,
     install_dir : 'lib/obs-plugins',
