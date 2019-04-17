@@ -130,6 +130,10 @@ static void* capture_thread(void *p)
 			.height = frame_info.dwHeight,
 			.format = VIDEO_FORMAT_BGRX,
 			.full_range = true,
+			// Basically just a frame counter. Actual TS would be (* 1000).
+			// But this would just increase some latency on the compositing layer.
+			// Since this is a live signal it is probably best to render as fast as
+			// it is received.
 			.timestamp = frame_info.ulTimestampUs,
 			.linesize[0] = frame_info.dwWidth * 4,
 			.data[0] = frame_buffer,
