@@ -239,8 +239,15 @@ static void hide(void *p)
 	pthread_join(data->thread, NULL);
 }
 
-static void update(void *data, obs_data_t *settings)
+static void update(void *p, obs_data_t *settings)
 {
+	data_t *data = p;
+
+	if (data->thread_is_running == false)
+	{
+		return;
+	}
+
 	hide(data);
 	show(data);
 }
