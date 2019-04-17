@@ -2,7 +2,7 @@
 
 OBS Studio source plugin using NVIDIA's FBC API for Linux.
 
-Note that this basically copies GPU memory to system memory just to push it back up to the GPU. Unless there is a way to direclty pass an OpenGL buffer from a source to OBS (is there?) this is less optimal as it could be.
+Note that this basically copies GPU memory to system memory just to push it back up to the GPU. Unless there is a way to directly pass an OpenGL buffer from a source to OBS (is there?) this is less optimal as it could be.
 
 ## Requirements
 
