@@ -235,6 +235,11 @@ static void hide(void *p)
 {
 	data_t *data = p;
 
+	if (data->thread_is_running == false)
+	{
+		return;
+	}
+
 	data->thread_shutdown = true;
 	pthread_join(data->thread, NULL);
 }
