@@ -33,7 +33,8 @@ typedef struct {
 	obs_source_t *source;
 	obs_data_t *settings;
 	pthread_t thread;
-	bool shutdown;
+	bool thread_shutdown;
+	bool thread_is_running;
 } data_t;
 
 static const char* get_name(void *type_data)
@@ -41,12 +42,40 @@ static const char* get_name(void *type_data)
 	return "NvFBC Source";
 }
 
+static void nvfbc_get_status(NVFBC_GET_STATUS_PARAMS *status_params)
+{
+	NVFBC_SESSION_HANDLE session;
+	NVFBC_CREATE_HANDLE_PARAMS params;
+
+	params.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER;
+
+	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+	}
+
+	ret = nvFBC.nvFBCGetStatus(session, status_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+	}
+
+	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {};
+	destroy_params.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER;
+
+	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+	}
+}
+
 static void* capture_thread(void *p)
 {
 	data_t *data = p;
 	void *frame_buffer;
-	NVFBC_SESSION_HANDLE session;
 
+	data->thread_is_running = true;
+
+	NVFBC_SESSION_HANDLE session;
 	NVFBC_CREATE_HANDLE_PARAMS params = {};
 
 	params.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER;
@@ -89,7 +118,7 @@ static void* capture_thread(void *p)
 	grab_params.dwFlags = NVFBC_TOSYS_GRAB_FLAGS_NOFLAGS;
 	grab_params.pFrameGrabInfo = &frame_info;
 
-	while (data->shutdown == false) {
+	while (data->thread_shutdown == false) {
 		NVFBCSTATUS ret = nvFBC.nvFBCToSysGrabFrame(session, &grab_params);
 		if (ret != NVFBC_SUCCESS) {
 			blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
@@ -127,6 +156,8 @@ bail:
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
 	}
 
+	data->thread_is_running = false;
+
 	return NULL;
 }
 
@@ -139,8 +170,6 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 	data->source = source;
 	data->settings = settings;
 
-	pthread_create(&data->thread, NULL, capture_thread, data);
-
 	return data;
 }
 
@@ -148,7 +177,7 @@ static void destroy(void *p)
 {
 	data_t *data = p;
 
-	data->shutdown = true;
+	data->thread_shutdown = true;
 	pthread_join(data->thread, NULL);
 
 	free(data);
@@ -156,30 +185,9 @@ static void destroy(void *p)
 
 static void get_defaults(obs_data_t *settings)
 {
-	NVFBC_SESSION_HANDLE session;
-	NVFBC_CREATE_HANDLE_PARAMS params = {};
-
-	params.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER;
-
-	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-	}
-
 	NVFBC_GET_STATUS_PARAMS status_params = {};
 
-	ret = nvFBC.nvFBCGetStatus(session, &status_params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-	}
-
-	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {};
-	destroy_params.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER;
-
-	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-	}
+	nvfbc_get_status(&status_params);
 
 	obs_data_set_default_int(settings, "screen", status_params.outputs[0].dwId);
 	obs_data_set_default_int(settings, "fps", 60);
@@ -190,30 +198,9 @@ static obs_properties_t* get_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
 
-	NVFBC_SESSION_HANDLE session;
-	NVFBC_CREATE_HANDLE_PARAMS params = {};
-
-	params.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER;
-
-	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-	}
-
 	NVFBC_GET_STATUS_PARAMS status_params = {};
 
-	ret = nvFBC.nvFBCGetStatus(session, &status_params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-	}
-
-	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {};
-	destroy_params.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER;
-
-	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-	}
+	nvfbc_get_status(&status_params);
 
 	obs_property_t *prop = obs_properties_add_list(props, "screen", "Screen", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
 
@@ -231,7 +218,12 @@ static void show(void *p)
 {
 	data_t *data = p;
 
-	data->shutdown = false;
+	if (data->thread_is_running == true)
+	{
+		return;
+	}
+
+	data->thread_shutdown = false;
 	pthread_create(&data->thread, NULL, capture_thread, data);
 }
 
@@ -239,7 +231,7 @@ static void hide(void *p)
 {
 	data_t *data = p;
 
-	data->shutdown = true;
+	data->thread_shutdown = true;
 	pthread_join(data->thread, NULL);
 }
 
