@@ -27,7 +27,9 @@
 
 OBS_DECLARE_MODULE()
 
-static NVFBC_API_FUNCTION_LIST nvFBC = {};
+static NVFBC_API_FUNCTION_LIST nvFBC = {
+	.dwVersion = NVFBC_VERSION
+};
 
 typedef struct {
 	obs_source_t *source;
@@ -45,9 +47,10 @@ static const char* get_name(void *type_data)
 static void nvfbc_get_status(NVFBC_GET_STATUS_PARAMS *status_params)
 {
 	NVFBC_SESSION_HANDLE session;
-	NVFBC_CREATE_HANDLE_PARAMS params;
 
-	params.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER;
+	NVFBC_CREATE_HANDLE_PARAMS params = {
+		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER
+	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
 	if (ret != NVFBC_SUCCESS) {
@@ -59,8 +62,9 @@ static void nvfbc_get_status(NVFBC_GET_STATUS_PARAMS *status_params)
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
 	}
 
-	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {};
-	destroy_params.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER;
+	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
+		.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
+	};
 
 	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
 	if (ret != NVFBC_SUCCESS) {
@@ -76,9 +80,10 @@ static void* capture_thread(void *p)
 	data->thread_is_running = true;
 
 	NVFBC_SESSION_HANDLE session;
-	NVFBC_CREATE_HANDLE_PARAMS params = {};
 
-	params.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER;
+	NVFBC_CREATE_HANDLE_PARAMS params = {
+		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER
+	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
 	if (ret != NVFBC_SUCCESS) {
@@ -86,13 +91,14 @@ static void* capture_thread(void *p)
 		goto bail;
 	}
 
-	NVFBC_CREATE_CAPTURE_SESSION_PARAMS cap_params = {};
-	cap_params.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER;
-	cap_params.eTrackingType = NVFBC_TRACKING_OUTPUT;
-	cap_params.eCaptureType = NVFBC_CAPTURE_TO_SYS;
-	cap_params.bWithCursor = obs_data_get_bool(data->settings, "show_cursor") ? NVFBC_TRUE : NVFBC_FALSE;
-	cap_params.dwSamplingRateMs = 1000.0 / obs_data_get_int(data->settings, "fps") + 0.5;
-	cap_params.dwOutputId = obs_data_get_int(data->settings, "screen");
+	NVFBC_CREATE_CAPTURE_SESSION_PARAMS cap_params = {
+		.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER,
+		.eTrackingType = NVFBC_TRACKING_OUTPUT,
+		.eCaptureType = NVFBC_CAPTURE_TO_SYS,
+		.bWithCursor = obs_data_get_bool(data->settings, "show_cursor") ? NVFBC_TRUE : NVFBC_FALSE,
+		.dwSamplingRateMs = 1000.0 / obs_data_get_int(data->settings, "fps") + 0.5,
+		.dwOutputId = obs_data_get_int(data->settings, "screen")
+	};
 
 	ret = nvFBC.nvFBCCreateCaptureSession(session, &cap_params);
 	if (ret != NVFBC_SUCCESS) {
@@ -100,10 +106,11 @@ static void* capture_thread(void *p)
 		goto bail;
 	}
 
-	NVFBC_TOSYS_SETUP_PARAMS setup_params = {};
-	setup_params.dwVersion = NVFBC_TOSYS_SETUP_PARAMS_VER;
-	setup_params.eBufferFormat = NVFBC_BUFFER_FORMAT_BGRA;
-	setup_params.ppBuffer = &frame_buffer;
+	NVFBC_TOSYS_SETUP_PARAMS setup_params = {
+		.dwVersion = NVFBC_TOSYS_SETUP_PARAMS_VER,
+		.eBufferFormat = NVFBC_BUFFER_FORMAT_BGRA,
+		.ppBuffer = &frame_buffer,
+	};
 
 	ret = nvFBC.nvFBCToSysSetUp(session, &setup_params);
 	if (ret != NVFBC_SUCCESS) {
@@ -112,11 +119,12 @@ static void* capture_thread(void *p)
 	}
 
 	NVFBC_FRAME_GRAB_INFO frame_info;
-	NVFBC_TOSYS_GRAB_FRAME_PARAMS grab_params = {};
 
-	grab_params.dwVersion = NVFBC_TOSYS_GRAB_FRAME_PARAMS_VER;
-	grab_params.dwFlags = NVFBC_TOSYS_GRAB_FLAGS_NOFLAGS;
-	grab_params.pFrameGrabInfo = &frame_info;
+	NVFBC_TOSYS_GRAB_FRAME_PARAMS grab_params = {
+		.dwVersion = NVFBC_TOSYS_GRAB_FRAME_PARAMS_VER,
+		.dwFlags = NVFBC_TOSYS_GRAB_FLAGS_NOFLAGS,
+		.pFrameGrabInfo = &frame_info,
+	};
 
 	while (data->thread_shutdown == false) {
 		NVFBCSTATUS ret = nvFBC.nvFBCToSysGrabFrame(session, &grab_params);
@@ -142,18 +150,19 @@ static void* capture_thread(void *p)
 		obs_source_output_video(data->source, &frame);
 	}
 
-	NVFBC_DESTROY_CAPTURE_SESSION_PARAMS destroy_cap_params = {};
+	NVFBC_DESTROY_CAPTURE_SESSION_PARAMS destroy_cap_params = {
+		.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER
+	};
 
 bail:
-	destroy_cap_params.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER;
-
 	ret = nvFBC.nvFBCDestroyCaptureSession(session, &destroy_cap_params);
 	if (ret != NVFBC_SUCCESS) {
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
 	}
 
-	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {};
-	destroy_params.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER;
+	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
+		.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
+	};
 
 	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
 	if (ret != NVFBC_SUCCESS) {
@@ -189,7 +198,9 @@ static void destroy(void *p)
 
 static void get_defaults(obs_data_t *settings)
 {
-	NVFBC_GET_STATUS_PARAMS status_params = {};
+	NVFBC_GET_STATUS_PARAMS status_params = {
+		.dwVersion = NVFBC_GET_STATUS_PARAMS_VER
+	};
 
 	nvfbc_get_status(&status_params);
 
@@ -202,7 +213,9 @@ static obs_properties_t* get_properties(void *data)
 {
 	obs_properties_t *props = obs_properties_create();
 
-	NVFBC_GET_STATUS_PARAMS status_params = {};
+	NVFBC_GET_STATUS_PARAMS status_params = {
+		.dwVersion = NVFBC_GET_STATUS_PARAMS_VER
+	};
 
 	nvfbc_get_status(&status_params);
 
@@ -222,8 +235,7 @@ static void show(void *p)
 {
 	data_t *data = p;
 
-	if (data->thread_is_running == true)
-	{
+	if (data->thread_is_running == true) {
 		return;
 	}
 
@@ -235,8 +247,7 @@ static void hide(void *p)
 {
 	data_t *data = p;
 
-	if (data->thread_is_running == false)
-	{
+	if (data->thread_is_running == false) {
 		return;
 	}
 
@@ -248,8 +259,7 @@ static void update(void *p, obs_data_t *settings)
 {
 	data_t *data = p;
 
-	if (data->thread_is_running == false)
-	{
+	if (data->thread_is_running == false) {
 		return;
 	}
 
@@ -273,8 +283,6 @@ bool obs_module_load(void)
 		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFCB library");
 		return false;
 	}
-
-	nvFBC.dwVersion = NVFBC_VERSION;
 
 	NVFBCSTATUS ret = NvFBCCreateInstance(&nvFBC);
 	if (ret != NVFBC_SUCCESS) {
