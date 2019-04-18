@@ -27,6 +27,8 @@
 
 OBS_DECLARE_MODULE()
 
+static void *dll = NULL;
+
 static NVFBC_API_FUNCTION_LIST nvFBC = {
 	.dwVersion = NVFBC_VERSION
 };
@@ -271,7 +273,7 @@ bool obs_module_load(void)
 {
 	PNVFBCCREATEINSTANCE NvFBCCreateInstance = NULL;
 
-	void *dll = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
+	dll = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
 	if (dll == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to load NvFCB library");
 		return false;
@@ -309,4 +311,11 @@ bool obs_module_load(void)
 	obs_register_source(&info);
 
 	return true;
+}
+
+void obs_module_unload(void)
+{
+	if (dll != NULL) {
+		dlclose(dll);
+	}
 }
