@@ -79,8 +79,6 @@ static void* capture_thread(void *p)
 	data_t *data = p;
 	void *frame_buffer;
 
-	data->thread_is_running = true;
-
 	NVFBC_SESSION_HANDLE session;
 
 	NVFBC_CREATE_HANDLE_PARAMS params = {
@@ -171,8 +169,6 @@ bail:
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
 	}
 
-	data->thread_is_running = false;
-
 	return NULL;
 }
 
@@ -194,6 +190,7 @@ static void destroy(void *p)
 
 	data->thread_shutdown = true;
 	pthread_join(data->thread, NULL);
+	data->thread_is_running = false;
 
 	free(data);
 }
@@ -243,6 +240,7 @@ static void show(void *p)
 
 	data->thread_shutdown = false;
 	pthread_create(&data->thread, NULL, capture_thread, data);
+	data->thread_is_running = true;
 }
 
 static void hide(void *p)
@@ -255,12 +253,14 @@ static void hide(void *p)
 
 	data->thread_shutdown = true;
 	pthread_join(data->thread, NULL);
+	data->thread_is_running = false;
 }
 
 static void update(void *p, obs_data_t *settings)
 {
 	data_t *data = p;
 
+	// prevent starting the thread if it is not running
 	if (data->thread_is_running == false) {
 		return;
 	}
@@ -280,7 +280,6 @@ bool obs_module_load(void)
 	}
 
 	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)dlsym(dll, "NvFBCCreateInstance");
-
 	if (NvFBCCreateInstance == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFCB library");
 		return false;
