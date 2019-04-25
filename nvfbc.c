@@ -39,6 +39,7 @@ typedef struct {
 	pthread_t thread;
 	bool thread_shutdown;
 	bool thread_is_running;
+	int64_t ts_offset;
 } data_t;
 
 static const char* get_name(void *type_data)
@@ -126,6 +127,8 @@ static void* capture_thread(void *p)
 		.pFrameGrabInfo = &frame_info,
 	};
 
+	data->ts_offset = INT64_MIN;
+
 	while (data->thread_shutdown == false) {
 		NVFBCSTATUS ret = nvFBC.nvFBCToSysGrabFrame(session, &grab_params);
 		if (ret != NVFBC_SUCCESS) {
@@ -146,6 +149,16 @@ static void* capture_thread(void *p)
 			.linesize[0] = frame_info.dwWidth * 4,
 			.data[0] = frame_buffer,
 		};
+
+		if (obs_data_get_bool(data->settings, "use_timestamps"))
+		{
+			if (data->ts_offset == INT64_MIN)
+			{
+				data->ts_offset = frame.timestamp;
+			}
+
+			frame.timestamp = (data->ts_offset - frame.timestamp) * 1000;
+		}
 
 		obs_source_output_video(data->source, &frame);
 	}
@@ -206,6 +219,7 @@ static void get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "screen", status_params.outputs[0].dwId);
 	obs_data_set_default_int(settings, "fps", 60);
 	obs_data_set_default_bool(settings, "show_cursor", true);
+	obs_data_set_default_bool(settings, "use_timestamps", false);
 }
 
 static obs_properties_t* get_properties(void *data)
@@ -226,6 +240,7 @@ static obs_properties_t* get_properties(void *data)
 
 	obs_properties_add_int(props, "fps", "FPS", 1, 60, 1);
 	obs_properties_add_bool(props, "show_cursor", "Cursor");
+	obs_properties_add_bool(props, "use_timestamps", "Use Timestamps (smoother but increases latency)");
 
 	return props;
 }
