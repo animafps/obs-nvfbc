@@ -150,10 +150,10 @@ static void* capture_thread(void *p)
 			.data[0] = frame_buffer,
 		};
 
-		if (obs_data_get_bool(data->settings, "use_timestamps"))
-		{
-			if (data->ts_offset == INT64_MIN)
-			{
+		// If timestamp option is set carry on the API's timestamp.
+		// Handle initial offset and convert to nanoseconds.
+		if (obs_data_get_bool(data->settings, "use_timestamps")) {
+			if (data->ts_offset == INT64_MIN) {
 				data->ts_offset = frame.timestamp;
 			}
 
