@@ -238,7 +238,7 @@ static obs_properties_t* get_properties(void *data)
 		obs_property_list_add_int(prop, status_params.outputs[i].name, status_params.outputs[i].dwId);
 	}
 
-	obs_properties_add_int(props, "fps", "FPS", 1, 60, 1);
+	obs_properties_add_int(props, "fps", "FPS", 1, 120, 1);
 	obs_properties_add_bool(props, "show_cursor", "Cursor");
 	obs_properties_add_bool(props, "use_timestamps", "Use Timestamps (smoother but increases latency)");
 
