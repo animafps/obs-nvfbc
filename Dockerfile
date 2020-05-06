@@ -1,4 +1,4 @@
-FROM ubuntu:bionic
+FROM debian:bullseye
 
 RUN apt update \
  && apt install -y gcc meson ninja-build libobs-dev \
