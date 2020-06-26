@@ -8,5 +8,5 @@ shared_library('nvfbc', 'nvfbc.c',
         meson.get_compiler('c').find_library('dl'),
     ],
     install : true,
-    install_dir : 'lib/obs-plugins',
+    install_dir : join_paths(get_option('libdir'), 'obs-plugins'),
 )
