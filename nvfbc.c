@@ -163,11 +163,11 @@ static void* capture_thread(void *p)
 		obs_source_output_video(data->source, &frame);
 	}
 
+bail:;
 	NVFBC_DESTROY_CAPTURE_SESSION_PARAMS destroy_cap_params = {
 		.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER
 	};
 
-bail:
 	ret = nvFBC.nvFBCDestroyCaptureSession(session, &destroy_cap_params);
 	if (ret != NVFBC_SUCCESS) {
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
