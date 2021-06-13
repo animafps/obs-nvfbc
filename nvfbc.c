@@ -79,6 +79,7 @@ static void* capture_thread(void *p)
 {
 	data_t *data = p;
 	void *frame_buffer;
+	bool use_timestamps = obs_data_get_bool(data->settings, "use_timestamps");
 
 	NVFBC_SESSION_HANDLE session;
 
@@ -152,7 +153,7 @@ static void* capture_thread(void *p)
 
 		// If timestamp option is set carry on the API's timestamp.
 		// Handle initial offset and convert to nanoseconds.
-		if (obs_data_get_bool(data->settings, "use_timestamps")) {
+		if (use_timestamps) {
 			if (data->ts_offset == INT64_MIN) {
 				data->ts_offset = frame.timestamp;
 			}
