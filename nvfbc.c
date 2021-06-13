@@ -27,7 +27,7 @@
 
 OBS_DECLARE_MODULE()
 
-static void *dll = NULL;
+static void *nvfbc_lib = NULL;
 
 static NVFBC_API_FUNCTION_LIST nvFBC = {
 	.dwVersion = NVFBC_VERSION
@@ -304,13 +304,13 @@ bool obs_module_load(void)
 {
 	PNVFBCCREATEINSTANCE NvFBCCreateInstance = NULL;
 
-	dll = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
-	if (dll == NULL) {
+	nvfbc_lib = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
+	if (nvfbc_lib == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to load NvFBC library");
 		return false;
 	}
 
-	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)dlsym(dll, "NvFBCCreateInstance");
+	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)dlsym(nvfbc_lib, "NvFBCCreateInstance");
 	if (NvFBCCreateInstance == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFBC library");
 		return false;
@@ -329,7 +329,7 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
-	if (dll != NULL) {
-		dlclose(dll);
+	if (nvfbc_lib != NULL) {
+		dlclose(nvfbc_lib);
 	}
 }
