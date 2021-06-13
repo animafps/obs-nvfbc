@@ -188,9 +188,7 @@ bail:;
 
 static void* create(obs_data_t *settings, obs_source_t *source)
 {
-	data_t *data = malloc(sizeof(data_t));
-
-	memset(data, 0, sizeof(data_t));
+	data_t *data = bzalloc(sizeof(data_t));
 
 	data->source = source;
 	data->settings = settings;
@@ -206,7 +204,7 @@ static void destroy(void *p)
 	pthread_join(data->thread, NULL);
 	data->thread_is_running = false;
 
-	free(data);
+	bfree(data);
 }
 
 static void get_defaults(obs_data_t *settings)
