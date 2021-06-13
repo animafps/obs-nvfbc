@@ -290,13 +290,13 @@ bool obs_module_load(void)
 
 	dll = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
 	if (dll == NULL) {
-		blog(LOG_ERROR, "%s", "Unable to load NvFCB library");
+		blog(LOG_ERROR, "%s", "Unable to load NvFBC library");
 		return false;
 	}
 
 	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)dlsym(dll, "NvFBCCreateInstance");
 	if (NvFBCCreateInstance == NULL) {
-		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFCB library");
+		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFBC library");
 		return false;
 	}
 
