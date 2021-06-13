@@ -37,7 +37,7 @@ typedef struct {
 	obs_source_t *source;
 	obs_data_t *settings;
 	pthread_t thread;
-	bool thread_shutdown;
+	volatile bool thread_shutdown;
 	bool thread_is_running;
 	int64_t ts_offset;
 } data_t;
