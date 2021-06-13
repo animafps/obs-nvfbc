@@ -1,4 +1,4 @@
-project('obs-nvfbc', 'c')
+project('obs-nvfbc', 'c', default_options: ['c_std=c99'])
 
 shared_library('nvfbc', 'nvfbc.c',
     name_prefix : '',
