@@ -284,6 +284,22 @@ static void update(void *p, obs_data_t *settings)
 	show(data);
 }
 
+struct obs_source_info nvfbc_source = {
+	.id = "nvfbc-source",
+	.type = OBS_SOURCE_TYPE_INPUT,
+	.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_DO_NOT_DUPLICATE,
+
+	.get_name = get_name,
+	.create = create,
+	.destroy = destroy,
+
+	.get_defaults = get_defaults,
+	.get_properties = get_properties,
+	.show = show,
+	.hide = hide,
+	.update = update,
+};
+
 bool obs_module_load(void)
 {
 	PNVFBCCREATEINSTANCE NvFBCCreateInstance = NULL;
@@ -306,23 +322,7 @@ bool obs_module_load(void)
 		return false;
 	}
 
-	struct obs_source_info info = {
-		.id = "nvfbc-source",
-		.type = OBS_SOURCE_TYPE_INPUT,
-		.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_DO_NOT_DUPLICATE,
-
-		.get_name = get_name,
-		.create = create,
-		.destroy = destroy,
-
-		.get_defaults = get_defaults,
-		.get_properties = get_properties,
-		.show = show,
-		.hide = hide,
-		.update = update,
-	};
-
-	obs_register_source(&info);
+	obs_register_source(&nvfbc_source);
 
 	return true;
 }
