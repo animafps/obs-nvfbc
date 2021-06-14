@@ -231,7 +231,7 @@ static bool create_capture_session(data_nvfbc_t *data_nvfbc, obs_data_t *setting
 		.bDisableAutoModesetRecovery = NVFBC_FALSE,
 		.bRoundFrameSize = NVFBC_TRUE,
 		.dwSamplingRateMs = 1000.0 / obs_data_get_int(settings, "fps") + 0.5,
-		.bPushModel = NVFBC_FALSE
+		.bPushModel = obs_data_get_bool(settings, "push_model") ? NVFBC_TRUE : NVFBC_FALSE,
 	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateCaptureSession(data_nvfbc->nvfbc_session, &cap_params);
@@ -618,6 +618,7 @@ static void get_defaults(obs_data_t *settings)
 
 	obs_data_set_default_int(settings, "fps", 60);
 	obs_data_set_default_bool(settings, "show_cursor", true);
+	obs_data_set_default_bool(settings, "push_model", true);
 }
 
 static obs_properties_t* get_properties(void *p)
@@ -670,6 +671,7 @@ screen_list:;
 
 	obs_properties_add_int(props, "fps", "FPS", 1, 120, 1);
 	obs_properties_add_bool(props, "show_cursor", "Cursor");
+	obs_properties_add_bool(props, "push_model", "Use Push Model");
 
 	return props;
 
