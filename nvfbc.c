@@ -21,9 +21,9 @@
 
 #include <obs/obs-module.h>
 #include <obs/util/threading.h>
+#include <obs/util/platform.h>
 
 #include "NvFBC.h"
-#include <dlfcn.h>
 
 OBS_DECLARE_MODULE()
 
@@ -303,13 +303,13 @@ bool obs_module_load(void)
 {
 	PNVFBCCREATEINSTANCE NvFBCCreateInstance = NULL;
 
-	nvfbc_lib = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
+	nvfbc_lib = os_dlopen("libnvidia-fbc.so.1");
 	if (nvfbc_lib == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to load NvFBC library");
 		return false;
 	}
 
-	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)dlsym(nvfbc_lib, "NvFBCCreateInstance");
+	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)os_dlsym(nvfbc_lib, "NvFBCCreateInstance");
 	if (NvFBCCreateInstance == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFBC library");
 		return false;
@@ -329,6 +329,6 @@ bool obs_module_load(void)
 void obs_module_unload(void)
 {
 	if (nvfbc_lib != NULL) {
-		dlclose(nvfbc_lib);
+		os_dlclose(nvfbc_lib);
 	}
 }
