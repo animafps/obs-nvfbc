@@ -52,7 +52,8 @@ static void nvfbc_get_status(NVFBC_GET_STATUS_PARAMS *status_params)
 	NVFBC_SESSION_HANDLE session;
 
 	NVFBC_CREATE_HANDLE_PARAMS params = {
-		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER
+		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER,
+		.bExternallyManagedContext = NVFBC_FALSE
 	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
@@ -84,7 +85,8 @@ static void* capture_thread(void *p)
 	NVFBC_SESSION_HANDLE session;
 
 	NVFBC_CREATE_HANDLE_PARAMS params = {
-		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER
+		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER,
+		.bExternallyManagedContext = NVFBC_FALSE
 	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
