@@ -303,7 +303,7 @@ struct obs_source_info nvfbc_source = {
 
 bool obs_module_load(void)
 {
-	PNVFBCCREATEINSTANCE NvFBCCreateInstance = NULL;
+	PNVFBCCREATEINSTANCE p_NvFBCCreateInstance = NULL;
 
 	nvfbc_lib = os_dlopen("libnvidia-fbc.so.1");
 	if (nvfbc_lib == NULL) {
@@ -311,13 +311,13 @@ bool obs_module_load(void)
 		return false;
 	}
 
-	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)os_dlsym(nvfbc_lib, "NvFBCCreateInstance");
-	if (NvFBCCreateInstance == NULL) {
+	p_NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)os_dlsym(nvfbc_lib, "NvFBCCreateInstance");
+	if (p_NvFBCCreateInstance == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFBC library");
 		return false;
 	}
 
-	NVFBCSTATUS ret = NvFBCCreateInstance(&nvFBC);
+	NVFBCSTATUS ret = p_NvFBCCreateInstance(&nvFBC);
 	if (ret != NVFBC_SUCCESS) {
 		blog(LOG_ERROR, "%s", "Unable to create NvFBC instance");
 		return false;
