@@ -27,6 +27,13 @@
 
 OBS_DECLARE_MODULE()
 
+#if _WIN64
+#define NVFBC_LIB_NAME "NvFBC64.dll"
+#elif _WIN32
+#define NVFBC_LIB_NAME "NvFBC.dll"
+#else
+#define NVFBC_LIB_NAME "libnvidia-fbc.so.1"
+#endif
 static void *nvfbc_lib = NULL;
 
 static NVFBC_API_FUNCTION_LIST nvFBC = {
@@ -305,7 +312,7 @@ bool obs_module_load(void)
 {
 	PNVFBCCREATEINSTANCE p_NvFBCCreateInstance = NULL;
 
-	nvfbc_lib = os_dlopen("libnvidia-fbc.so.1");
+	nvfbc_lib = os_dlopen(NVFBC_LIB_NAME);
 	if (nvfbc_lib == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to load NvFBC library");
 		return false;
