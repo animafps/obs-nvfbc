@@ -80,6 +80,11 @@ typedef struct {
 typedef struct {
 	pthread_mutex_t session_mutex;
 	NVFBC_SESSION_HANDLE nvfbc_session;
+#if _WIN32
+	HGLRC nvfbc_ctx;
+#elif defined(__linux__)
+	GLXContext nvfbc_ctx;
+#endif
 	bool has_capture_session;
 	NVFBC_TOGL_SETUP_PARAMS togl_setup_params;
 } data_nvfbc_t;
@@ -88,6 +93,9 @@ typedef struct {
 	pthread_mutex_t texture_mutex;
 	uint32_t width, height;
 	gs_texture_t *texture;
+#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+	Display *dpy;
+#endif
 } data_texture_t;
 
 typedef struct {
@@ -116,12 +124,34 @@ static bool create_nvfbc_session(data_nvfbc_t *data_nvfbc)
 	if (ret != NVFBC_SUCCESS) {
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
 		data_nvfbc->nvfbc_session = -1;
-		return false;
+		goto create_handle_err;
 	}
 
 	data_nvfbc->has_capture_session = false;
 
+#if _WIN32
+	data_nvfbc->nvfbc_ctx = wglGetCurrentContext();
+#elif defined(__linux__)
+	data_nvfbc->nvfbc_ctx = glXGetCurrentContext();
+#endif
+	if (data_nvfbc->nvfbc_ctx == NULL) {
+		blog(LOG_ERROR, "%s", "Could not get NvFBC OpenGL context");
+		goto get_ctx_failed;
+	}
+
 	return true;
+
+get_ctx_failed:;
+	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
+		.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
+	};
+	ret = nvFBC.nvFBCDestroyHandle(data_nvfbc->nvfbc_session, &destroy_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+	}
+	data_nvfbc->nvfbc_session = -1;
+create_handle_err:;
+	return false;
 }
 
 static void destroy_nvfbc_session(data_nvfbc_t *data_nvfbc)
@@ -386,16 +416,6 @@ static bool update_texture(data_t *data)
 		goto enter_ctx_failed;
 	}
 
-#if _WIN32
-	HGLRC nvfbc_ctx = wglGetCurrentContext();
-#elif defined(__linux__)
-	GLXContext nvfbc_ctx = glXGetCurrentContext();
-#endif
-	if (nvfbc_ctx == NULL) {
-		blog(LOG_ERROR, "%s", "No current context");
-		goto get_ctx_failed;
-	}
-
 	GLuint nvfbc_tex;
 	NVFBC_FRAME_GRAB_INFO info;
 
@@ -418,10 +438,14 @@ static bool update_texture(data_t *data)
 #if _WIN32
 	p_wglCopyImageSubDataNV(
 #elif defined(__linux__)
+	Display *dpy = data->tex.dpy;
+	if (dpy == NULL) {
+		data->tex.dpy = dpy = glXGetCurrentDisplay();
+	}
 	p_glXCopyImageSubDataNV(
-		glXGetCurrentDisplay(),
+		dpy,
 #endif
-		nvfbc_ctx, nvfbc_tex, data->nvfbc.togl_setup_params.dwTexTarget, 0, 0, 0, 0,
+		data->nvfbc.nvfbc_ctx, nvfbc_tex, data->nvfbc.togl_setup_params.dwTexTarget, 0, 0, 0, 0,
 		NULL, *(GLuint*)gs_texture_get_obj(data->tex.texture), GL_TEXTURE_2D, 0, 0, 0, 0,
 		info.dwWidth, info.dwHeight, 1
 	);
@@ -451,7 +475,6 @@ tex_create_failed:;
 tex_lock_err:;
 	goto enter_ctx_failed;
 capture_frame_err:;
-get_ctx_failed:;
 	switch_to_obs_context(&data->nvfbc);
 enter_ctx_failed:;
 no_capture_session:;
