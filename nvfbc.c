@@ -19,15 +19,54 @@
  * along with obs-nvfbc. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#if !_WIN32 && !defined(__linux__)
+#error "Unsupported platform"
+#endif
+
+#if _WIN32
+#define WGL_WGLEXT_PROTOTYPES 1
+#endif
+
+#include <obs/obs-config.h>
 #include <obs/obs-module.h>
 #include <obs/util/threading.h>
+#include <obs/util/platform.h>
+#include <obs/graphics/graphics.h>
+#if !defined(_WIN32) || !_WIN32
+#if LIBOBS_API_VER >= MAKE_SEMANTIC_VERSION(27, 0, 0)
+#include <obs/obs-nix-platform.h>
+#endif
+#endif
 
 #include "NvFBC.h"
-#include <dlfcn.h>
+
+#include <GL/gl.h>
+#if _WIN32
+#include <GL/wgl.h>
+#include <GL/wglext.h>
+#elif defined(__linux__)
+#include <GL/glx.h>
+#include <GL/glxext.h>
+#endif
+
+#include <string.h>
+#include <assert.h>
 
 OBS_DECLARE_MODULE()
 
-static void *dll = NULL;
+#if _WIN64
+#define NVFBC_LIB_NAME "NvFBC64.dll"
+#elif _WIN32
+#define NVFBC_LIB_NAME "NvFBC.dll"
+#else
+#define NVFBC_LIB_NAME "libnvidia-fbc.so.1"
+#endif
+static void *nvfbc_lib = NULL;
+#if _WIN32
+static PFNWGLCOPYIMAGESUBDATANVPROC p_wglCopyImageSubDataNV;
+#elif defined(__linux__)
+static PFNGLXCOPYIMAGESUBDATANVPROC p_glXCopyImageSubDataNV;
+#endif
 
 static NVFBC_API_FUNCTION_LIST nvFBC = {
 	.dwVersion = NVFBC_VERSION
@@ -36,10 +75,33 @@ static NVFBC_API_FUNCTION_LIST nvFBC = {
 typedef struct {
 	obs_source_t *source;
 	obs_data_t *settings;
-	pthread_t thread;
-	bool thread_shutdown;
-	bool thread_is_running;
-	int64_t ts_offset;
+} data_obs_t;
+
+typedef struct {
+	pthread_mutex_t session_mutex;
+	NVFBC_SESSION_HANDLE nvfbc_session;
+#if _WIN32
+	HGLRC nvfbc_ctx;
+#elif defined(__linux__)
+	GLXContext nvfbc_ctx;
+#endif
+	bool has_capture_session;
+	NVFBC_TOGL_SETUP_PARAMS togl_setup_params;
+} data_nvfbc_t;
+
+typedef struct {
+	pthread_mutex_t texture_mutex;
+	uint32_t width, height;
+	gs_texture_t *texture;
+#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+	Display *dpy;
+#endif
+} data_texture_t;
+
+typedef struct {
+	data_obs_t obs;
+	data_nvfbc_t nvfbc;
+	data_texture_t tex;
 } data_t;
 
 static const char* get_name(void *type_data)
@@ -47,165 +109,524 @@ static const char* get_name(void *type_data)
 	return "NvFBC Source";
 }
 
-static void nvfbc_get_status(NVFBC_GET_STATUS_PARAMS *status_params)
+static bool create_nvfbc_session(data_nvfbc_t *data_nvfbc)
 {
-	NVFBC_SESSION_HANDLE session;
-
-	NVFBC_CREATE_HANDLE_PARAMS params = {
-		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER
-	};
-
-	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
-	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+	if (data_nvfbc->nvfbc_session != -1) {
+		return true;
 	}
 
-	ret = nvFBC.nvFBCGetStatus(session, status_params);
+	NVFBC_CREATE_HANDLE_PARAMS params = {
+		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER,
+		.bExternallyManagedContext = NVFBC_FALSE
+	};
+
+	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&data_nvfbc->nvfbc_session, &params);
 	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+		data_nvfbc->nvfbc_session = -1;
+		goto create_handle_err;
+	}
+
+	data_nvfbc->has_capture_session = false;
+
+#if _WIN32
+	data_nvfbc->nvfbc_ctx = wglGetCurrentContext();
+#elif defined(__linux__)
+	data_nvfbc->nvfbc_ctx = glXGetCurrentContext();
+#endif
+	if (data_nvfbc->nvfbc_ctx == NULL) {
+		blog(LOG_ERROR, "%s", "Could not get NvFBC OpenGL context");
+		goto get_ctx_failed;
+	}
+
+	return true;
+
+get_ctx_failed:;
+	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
+		.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
+	};
+	ret = nvFBC.nvFBCDestroyHandle(data_nvfbc->nvfbc_session, &destroy_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+	}
+	data_nvfbc->nvfbc_session = -1;
+create_handle_err:;
+	return false;
+}
+
+static void destroy_nvfbc_session(data_nvfbc_t *data_nvfbc)
+{
+	if (data_nvfbc->nvfbc_session == -1) {
+		return;
 	}
 
 	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
 		.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
 	};
 
-	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
+	NVFBCSTATUS ret = nvFBC.nvFBCDestroyHandle(data_nvfbc->nvfbc_session, &destroy_params);
 	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+		blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+	}
+
+	data_nvfbc->has_capture_session = false;
+	data_nvfbc->nvfbc_session = -1;
+}
+
+static bool enter_nvfbc_context(data_nvfbc_t *data_nvfbc)
+{
+	if (data_nvfbc->nvfbc_session == -1) {
+		return false;
+	}
+
+	NVFBC_BIND_CONTEXT_PARAMS bind_context_params = {
+		.dwVersion = NVFBC_BIND_CONTEXT_PARAMS_VER
+	};
+
+	NVFBCSTATUS ret = nvFBC.nvFBCBindContext(data_nvfbc->nvfbc_session, &bind_context_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+		return false;
+	}
+
+	return true;
+}
+
+static void leave_nvfbc_context(data_nvfbc_t *data_nvfbc)
+{
+	if (data_nvfbc->nvfbc_session == -1) {
+		return;
+	}
+
+	NVFBC_RELEASE_CONTEXT_PARAMS release_context_params = {
+		.dwVersion = NVFBC_RELEASE_CONTEXT_PARAMS_VER
+	};
+
+	NVFBCSTATUS ret = nvFBC.nvFBCReleaseContext(data_nvfbc->nvfbc_session, &release_context_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
 	}
 }
 
-static void* capture_thread(void *p)
+static bool get_nvfbc_status(NVFBC_SESSION_HANDLE session, NVFBC_GET_STATUS_PARAMS *status_params)
 {
-	data_t *data = p;
-	void *frame_buffer;
+	bool create_session = session == -1;
+	NVFBCSTATUS ret;
 
-	NVFBC_SESSION_HANDLE session;
+	if (create_session) {
+		NVFBC_CREATE_HANDLE_PARAMS params = {
+			.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER,
+			.bExternallyManagedContext = NVFBC_FALSE
+		};
 
-	NVFBC_CREATE_HANDLE_PARAMS params = {
-		.dwVersion = NVFBC_CREATE_HANDLE_PARAMS_VER
-	};
+		ret = nvFBC.nvFBCCreateHandle(&session, &params);
+		if (ret != NVFBC_SUCCESS) {
+			blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+			return false;
+		}
+	}
 
-	NVFBCSTATUS ret = nvFBC.nvFBCCreateHandle(&session, &params);
-	if (ret != NVFBC_SUCCESS) {
+	ret = nvFBC.nvFBCGetStatus(session, status_params);
+	bool ret2 = ret == NVFBC_SUCCESS;
+	if (!ret2) {
 		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-		goto bail;
+	}
+
+	if (create_session) {
+		NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
+			.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
+		};
+
+		ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
+		if (ret != NVFBC_SUCCESS) {
+			blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+		}
+	}
+
+	return ret2;
+}
+
+static bool create_capture_session(data_nvfbc_t *data_nvfbc, obs_data_t *settings)
+{
+	if (data_nvfbc->has_capture_session) {
+		return false;
 	}
 
 	NVFBC_CREATE_CAPTURE_SESSION_PARAMS cap_params = {
 		.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER,
+		.eCaptureType = NVFBC_CAPTURE_TO_GL,
 		.eTrackingType = NVFBC_TRACKING_OUTPUT,
-		.eCaptureType = NVFBC_CAPTURE_TO_SYS,
-		.bWithCursor = obs_data_get_bool(data->settings, "show_cursor") ? NVFBC_TRUE : NVFBC_FALSE,
-		.dwSamplingRateMs = 1000.0 / obs_data_get_int(data->settings, "fps") + 0.5,
-		.dwOutputId = obs_data_get_int(data->settings, "screen")
+		.dwOutputId = obs_data_get_int(settings, "screen"),
+		.bWithCursor = obs_data_get_bool(settings, "show_cursor") ? NVFBC_TRUE : NVFBC_FALSE,
+		.bDisableAutoModesetRecovery = NVFBC_FALSE,
+		.bRoundFrameSize = NVFBC_TRUE,
+		.dwSamplingRateMs = 1000.0 / obs_data_get_int(settings, "fps") + 0.5,
+		.bPushModel = obs_data_get_bool(settings, "push_model") ? NVFBC_TRUE : NVFBC_FALSE,
 	};
 
-	ret = nvFBC.nvFBCCreateCaptureSession(session, &cap_params);
+	NVFBCSTATUS ret = nvFBC.nvFBCCreateCaptureSession(data_nvfbc->nvfbc_session, &cap_params);
 	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-		goto bail;
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+		return false;
 	}
 
-	NVFBC_TOSYS_SETUP_PARAMS setup_params = {
-		.dwVersion = NVFBC_TOSYS_SETUP_PARAMS_VER,
-		.eBufferFormat = NVFBC_BUFFER_FORMAT_BGRA,
-		.ppBuffer = &frame_buffer,
+	data_nvfbc->togl_setup_params = (NVFBC_TOGL_SETUP_PARAMS){
+		.dwVersion = NVFBC_TOGL_SETUP_PARAMS_VER,
+		.eBufferFormat = NVFBC_BUFFER_FORMAT_RGBA,
+		.bWithDiffMap = NVFBC_FALSE,
+		.dwDiffMapScalingFactor = 1
 	};
 
-	ret = nvFBC.nvFBCToSysSetUp(session, &setup_params);
+	ret = nvFBC.nvFBCToGLSetUp(data_nvfbc->nvfbc_session, &data_nvfbc->togl_setup_params);
 	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-		goto bail;
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+		goto setup_error;
 	}
 
-	NVFBC_FRAME_GRAB_INFO frame_info;
+	data_nvfbc->has_capture_session = true;
 
-	NVFBC_TOSYS_GRAB_FRAME_PARAMS grab_params = {
-		.dwVersion = NVFBC_TOSYS_GRAB_FRAME_PARAMS_VER,
-		.dwFlags = NVFBC_TOSYS_GRAB_FLAGS_NOFLAGS,
-		.pFrameGrabInfo = &frame_info,
+	return true;
+
+setup_error:;
+	NVFBC_DESTROY_CAPTURE_SESSION_PARAMS destroy_cap_params = {
+		.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER,
 	};
 
-	data->ts_offset = INT64_MIN;
+	ret = nvFBC.nvFBCDestroyCaptureSession(data_nvfbc->nvfbc_session, &destroy_cap_params);
+	if (ret != NVFBC_SUCCESS) {
+		blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+	}
 
-	while (data->thread_shutdown == false) {
-		NVFBCSTATUS ret = nvFBC.nvFBCToSysGrabFrame(session, &grab_params);
-		if (ret != NVFBC_SUCCESS) {
-			blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
-			goto bail;
-		}
+	return false;
+}
 
-		struct obs_source_frame frame = {
-			.width = frame_info.dwWidth,
-			.height = frame_info.dwHeight,
-			.format = VIDEO_FORMAT_BGRX,
-			.full_range = true,
-			// Basically just a frame counter. Actual TS would be (* 1000).
-			// But this would just increase some latency on the compositing layer(?).
-			// Since this is a live signal it is probably best to render as fast as
-			// it is received.
-			.timestamp = frame_info.ulTimestampUs,
-			.linesize[0] = frame_info.dwWidth * 4,
-			.data[0] = frame_buffer,
-		};
-
-		// If timestamp option is set carry on the API's timestamp.
-		// Handle initial offset and convert to nanoseconds.
-		if (obs_data_get_bool(data->settings, "use_timestamps")) {
-			if (data->ts_offset == INT64_MIN) {
-				data->ts_offset = frame.timestamp;
-			}
-
-			frame.timestamp = (data->ts_offset - frame.timestamp) * 1000;
-		}
-
-		obs_source_output_video(data->source, &frame);
+static void destroy_capture_session(data_nvfbc_t *data_nvfbc)
+{
+	if (!data_nvfbc->has_capture_session) {
+		return;
 	}
 
 	NVFBC_DESTROY_CAPTURE_SESSION_PARAMS destroy_cap_params = {
 		.dwVersion = NVFBC_DESTROY_CAPTURE_SESSION_PARAMS_VER
 	};
 
-bail:
-	ret = nvFBC.nvFBCDestroyCaptureSession(session, &destroy_cap_params);
+	NVFBCSTATUS ret = nvFBC.nvFBCDestroyCaptureSession(data_nvfbc->nvfbc_session, &destroy_cap_params);
 	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+		blog(LOG_WARNING, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
 	}
 
-	NVFBC_DESTROY_HANDLE_PARAMS destroy_params = {
-		.dwVersion = NVFBC_DESTROY_HANDLE_PARAMS_VER
+	data_nvfbc->has_capture_session = false;
+}
+
+static bool switch_to_nvfbc_context(data_nvfbc_t *data_nvfbc)
+{
+	if (data_nvfbc->nvfbc_session == -1) {
+		return false;
+	}
+
+	obs_leave_graphics();
+
+	if (!enter_nvfbc_context(data_nvfbc)) {
+		obs_enter_graphics();
+		return false;
+	}
+
+	return true;
+}
+
+static void switch_to_obs_context(data_nvfbc_t *data_nvfbc)
+{
+	leave_nvfbc_context(data_nvfbc);
+
+	obs_enter_graphics();
+}
+
+static bool capture_frame(data_nvfbc_t *data_nvfbc, GLuint *out_texture, NVFBC_FRAME_GRAB_INFO *out_info)
+{
+	if (!data_nvfbc->has_capture_session) {
+		return false;
+	}
+
+	NVFBC_TOGL_GRAB_FRAME_PARAMS grab_params = {
+		.dwVersion = NVFBC_TOGL_GRAB_FRAME_PARAMS_VER,
+		.dwFlags = NVFBC_TOGL_GRAB_FLAGS_NOWAIT_IF_NEW_FRAME_READY,
+		.pFrameGrabInfo = out_info,
+		.dwTimeoutMs = 0
 	};
 
-	ret = nvFBC.nvFBCDestroyHandle(session, &destroy_params);
+	NVFBCSTATUS ret = nvFBC.nvFBCToGLGrabFrame(data_nvfbc->nvfbc_session, &grab_params);
 	if (ret != NVFBC_SUCCESS) {
-		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(session));
+		blog(LOG_ERROR, "%s", nvFBC.nvFBCGetLastErrorStr(data_nvfbc->nvfbc_session));
+		return false;
 	}
 
-	return NULL;
+	*out_texture = data_nvfbc->togl_setup_params.dwTextures[grab_params.dwTextureIndex];
+
+	return true;
+}
+
+static bool resize_texture(data_texture_t *data_texture, uint32_t width, uint32_t height)
+{
+	if (data_texture->texture != NULL && width == data_texture->width && height == data_texture->height) {
+		return true;
+	}
+
+	if (data_texture->texture != NULL) {
+		gs_texture_destroy(data_texture->texture);
+	}
+
+	data_texture->texture = gs_texture_create(width, height, GS_RGBA, 1, NULL, GS_DYNAMIC);
+	if (data_texture->texture == NULL) {
+		return false;
+	}
+
+	/* HACK: OBS's graphics api doesn't support creating a texture with internal format GL_RGBA8,
+		which is required by *CopyImageSubDataNV because the NvFBC texture has that format. */
+	GLuint new_tex;
+	glGenTextures(1, &new_tex);
+	glBindTexture(GL_TEXTURE_2D, new_tex);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	glBindTexture(GL_TEXTURE_2D, 0);
+	GLuint old_tex = *(GLuint*)gs_texture_get_obj(data_texture->texture);
+	*(GLuint*)gs_texture_get_obj(data_texture->texture) = new_tex;
+	glDeleteTextures(1, &old_tex);
+
+	data_texture->width = width;
+	data_texture->height = height;
+
+	return true;
+}
+
+static bool update_texture(data_t *data)
+{
+	int error = pthread_mutex_lock(&data->nvfbc.session_mutex);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex lock error: %s", strerror(error));
+		goto nvfbc_lock_err;
+	}
+
+	if (!data->nvfbc.has_capture_session) {
+		goto no_capture_session;
+	}
+
+	if (!switch_to_nvfbc_context(&data->nvfbc)) {
+		goto enter_ctx_failed;
+	}
+
+	GLuint nvfbc_tex;
+	NVFBC_FRAME_GRAB_INFO info;
+
+	if (!capture_frame(&data->nvfbc, &nvfbc_tex, &info)) {
+		goto capture_frame_err;
+	}
+
+	switch_to_obs_context(&data->nvfbc);
+
+	error = pthread_mutex_lock(&data->tex.texture_mutex);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex lock error: %s", strerror(error));
+		goto tex_lock_err;
+	}
+
+	if (!resize_texture(&data->tex, info.dwWidth, info.dwHeight)) {
+		goto tex_create_failed;
+	}
+
+#if _WIN32
+	p_wglCopyImageSubDataNV(
+#elif defined(__linux__)
+	Display *dpy = data->tex.dpy;
+	if (dpy == NULL) {
+		data->tex.dpy = dpy = glXGetCurrentDisplay();
+	}
+	p_glXCopyImageSubDataNV(
+		dpy,
+#endif
+		data->nvfbc.nvfbc_ctx, nvfbc_tex, data->nvfbc.togl_setup_params.dwTexTarget, 0, 0, 0, 0,
+		NULL, *(GLuint*)gs_texture_get_obj(data->tex.texture), GL_TEXTURE_2D, 0, 0, 0, 0,
+		info.dwWidth, info.dwHeight, 1
+	);
+
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
+
+	GLenum glerr = glGetError();
+	if (glerr != GL_NO_ERROR) {
+#if _WIN32
+		blog(LOG_ERROR, "wglCopyImageSubDataNV GL error: %x", glerr);
+#elif defined(__linux__)
+		blog(LOG_ERROR, "glXCopyImageSubDataNV GL error: %x", glerr);
+#endif
+		goto tex_copy_failed;
+	}
+
+	error = pthread_mutex_unlock(&data->tex.texture_mutex);
+	assert(error == 0);
+
+	return true;
+
+tex_copy_failed:;
+tex_create_failed:;
+	error = pthread_mutex_unlock(&data->tex.texture_mutex);
+	assert(error == 0);
+tex_lock_err:;
+	goto enter_ctx_failed;
+capture_frame_err:;
+	switch_to_obs_context(&data->nvfbc);
+enter_ctx_failed:;
+no_capture_session:;
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
+nvfbc_lock_err:;
+	return false;
 }
 
 static void* create(obs_data_t *settings, obs_source_t *source)
 {
-	data_t *data = malloc(sizeof(data_t));
+	obs_enter_graphics();
+	if (gs_get_device_type() != GS_DEVICE_OPENGL) {
+		blog(LOG_ERROR, "%s", "This plugin requires an OpenGL context");
+		goto not_opengl_err;
+	}
+	obs_leave_graphics();
+#if !defined(_WIN32) || !_WIN32
+#if LIBOBS_API_VER >= MAKE_SEMANTIC_VERSION(27, 0, 0)
+	if (obs_get_nix_platform() != OBS_NIX_PLATFORM_X11_GLX) {
+		blog(LOG_ERROR, "%s", "This plugin requires a GLX context");
+		goto not_glx_err;
+	}
+#endif
+#endif
 
-	memset(data, 0, sizeof(data_t));
+	data_t *data = bzalloc(sizeof(data_t));
+	if (data == NULL) {
+		blog(LOG_ERROR, "%s", "Out of memory");
+		goto alloc_err;
+	}
 
-	data->source = source;
-	data->settings = settings;
+	data->obs.source = source;
+	data->obs.settings = settings;
+	data->nvfbc.nvfbc_session = -1;
+
+	int error = pthread_mutex_init(&data->nvfbc.session_mutex, NULL);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex initialization error: %s", strerror(error));
+		goto sess_mutex_err;
+	}
+
+	error = pthread_mutex_init(&data->tex.texture_mutex, NULL);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex initialization error: %s", strerror(error));
+		goto tex_mutex_err;
+	}
+
+	if (!create_nvfbc_session(&data->nvfbc)) {
+		goto nvfbc_err;
+	}
+	leave_nvfbc_context(&data->nvfbc);
 
 	return data;
+
+nvfbc_err:;
+	pthread_mutex_destroy(&data->tex.texture_mutex);
+tex_mutex_err:;
+	pthread_mutex_destroy(&data->nvfbc.session_mutex);
+sess_mutex_err:;
+	bfree(data);
+alloc_err:;
+#if !defined(_WIN32) || !_WIN32
+#if LIBOBS_API_VER >= MAKE_SEMANTIC_VERSION(27, 0, 0)
+not_glx_err:;
+#endif
+#endif
+not_opengl_err:;
+	return NULL;
 }
 
 static void destroy(void *p)
 {
 	data_t *data = p;
 
-	data->thread_shutdown = true;
-	pthread_join(data->thread, NULL);
-	data->thread_is_running = false;
+	pthread_mutex_lock(&data->tex.texture_mutex);
 
-	free(data);
+	if (data->tex.texture != NULL) {
+		gs_texture_destroy(data->tex.texture);
+	}
+
+	pthread_mutex_lock(&data->nvfbc.session_mutex);
+
+	if (data->nvfbc.nvfbc_session != -1) {
+		while (!enter_nvfbc_context(&data->nvfbc));
+		destroy_capture_session(&data->nvfbc);
+		destroy_nvfbc_session(&data->nvfbc);
+	}
+
+	pthread_mutex_destroy(&data->tex.texture_mutex);
+	pthread_mutex_destroy(&data->nvfbc.session_mutex);
+
+	bfree(data);
+}
+
+static void render(void *p, gs_effect_t *effect)
+{
+	data_t *data = p;
+
+	if (!update_texture(data)) {
+		goto tex_upd_err;
+	}
+
+	effect = obs_get_base_effect(OBS_EFFECT_OPAQUE);
+	gs_blend_state_push();
+	gs_reset_blend_state();
+
+	int error = pthread_mutex_lock(&data->tex.texture_mutex);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex lock error: %s", strerror(error));
+		goto tex_lock_err;
+	}
+
+	gs_eparam_t *image = gs_effect_get_param_by_name(effect, "image");
+	if (image == NULL) {
+		blog(LOG_ERROR, "Effect image parameter not found");
+		goto no_image;
+	}
+	gs_effect_set_texture(image, data->tex.texture);
+
+	while (gs_effect_loop(effect, "Draw")) {
+		gs_draw_sprite(data->tex.texture, 0, 0, 0);
+	}
+
+	error = pthread_mutex_unlock(&data->tex.texture_mutex);
+	assert(error == 0);
+
+	gs_blend_state_pop();
+
+	return;
+
+no_image:;
+	error = pthread_mutex_unlock(&data->tex.texture_mutex);
+	assert(error == 0);
+tex_lock_err:;
+	gs_blend_state_pop();
+tex_upd_err:;
+	return;
+}
+
+uint32_t get_width(void *p)
+{
+	data_t *data = p;
+
+	return data->tex.width;
+}
+
+uint32_t get_height(void *p)
+{
+	data_t *data = p;
+
+	return data->tex.height;
 }
 
 static void get_defaults(obs_data_t *settings)
@@ -214,122 +635,196 @@ static void get_defaults(obs_data_t *settings)
 		.dwVersion = NVFBC_GET_STATUS_PARAMS_VER
 	};
 
-	nvfbc_get_status(&status_params);
+	if (get_nvfbc_status(-1, &status_params)) {
+		obs_data_set_default_int(settings, "screen", status_params.outputs[0].dwId);
+	}
 
-	obs_data_set_default_int(settings, "screen", status_params.outputs[0].dwId);
 	obs_data_set_default_int(settings, "fps", 60);
 	obs_data_set_default_bool(settings, "show_cursor", true);
-	obs_data_set_default_bool(settings, "use_timestamps", false);
+	obs_data_set_default_bool(settings, "push_model", true);
 }
 
-static obs_properties_t* get_properties(void *data)
+static obs_properties_t* get_properties(void *p)
 {
+	data_t *data = p;
+
 	obs_properties_t *props = obs_properties_create();
+	if (props == NULL) {
+		goto props_create_err;
+	}
 
 	NVFBC_GET_STATUS_PARAMS status_params = {
 		.dwVersion = NVFBC_GET_STATUS_PARAMS_VER
 	};
+	bool status_valid = false;
 
-	nvfbc_get_status(&status_params);
+	int error = pthread_mutex_lock(&data->nvfbc.session_mutex);
+	if (error != 0) {
+		goto create_context;
+	}
 
+	if (!enter_nvfbc_context(&data->nvfbc)) {
+		goto enter_ctx_failed;
+	}
+	status_valid = get_nvfbc_status(data->nvfbc.nvfbc_session, &status_params);
+	leave_nvfbc_context(&data->nvfbc);
+
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
+
+	goto screen_list;
+
+enter_ctx_failed:;
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
+create_context:;
+	status_valid = get_nvfbc_status(-1, &status_params);
+
+screen_list:;
 	obs_property_t *prop = obs_properties_add_list(props, "screen", "Screen", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	if (prop == NULL) {
+		goto screen_lst_alloc_err;
+	}
 
-	for (int i = 0; i < status_params.dwOutputNum; i++) {
-		obs_property_list_add_int(prop, status_params.outputs[i].name, status_params.outputs[i].dwId);
+	if (status_valid) {
+		for (int i = 0; i < status_params.dwOutputNum; i++) {
+			obs_property_list_add_int(prop, status_params.outputs[i].name, status_params.outputs[i].dwId);
+		}
 	}
 
 	obs_properties_add_int(props, "fps", "FPS", 1, 120, 1);
 	obs_properties_add_bool(props, "show_cursor", "Cursor");
-	obs_properties_add_bool(props, "use_timestamps", "Use Timestamps (smoother but increases latency)");
+	obs_properties_add_bool(props, "push_model", "Use Push Model");
 
 	return props;
+
+screen_lst_alloc_err:;
+	obs_properties_destroy(props);
+props_create_err:;
+	return NULL;
 }
 
 static void show(void *p)
 {
 	data_t *data = p;
 
-	if (data->thread_is_running == true) {
+	int error = pthread_mutex_lock(&data->nvfbc.session_mutex);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex lock error: %s", strerror(error));
 		return;
 	}
 
-	data->thread_shutdown = false;
-	pthread_create(&data->thread, NULL, capture_thread, data);
-	data->thread_is_running = true;
+	if (enter_nvfbc_context(&data->nvfbc)) {
+		create_capture_session(&data->nvfbc, data->obs.settings);
+		leave_nvfbc_context(&data->nvfbc);
+	}
+
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
 }
 
 static void hide(void *p)
 {
 	data_t *data = p;
 
-	if (data->thread_is_running == false) {
+	int error = pthread_mutex_lock(&data->nvfbc.session_mutex);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex lock error: %s", strerror(error));
 		return;
 	}
 
-	data->thread_shutdown = true;
-	pthread_join(data->thread, NULL);
-	data->thread_is_running = false;
+	if (enter_nvfbc_context(&data->nvfbc)) {
+		destroy_capture_session(&data->nvfbc);
+		leave_nvfbc_context(&data->nvfbc);
+	}
+
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
 }
 
 static void update(void *p, obs_data_t *settings)
 {
 	data_t *data = p;
 
-	// prevent starting the thread if it is not running
-	if (data->thread_is_running == false) {
+	int error = pthread_mutex_lock(&data->nvfbc.session_mutex);
+	if (error != 0) {
+		blog(LOG_ERROR, "Mutex lock error: %s", strerror(error));
 		return;
 	}
 
-	hide(data);
-	show(data);
+	if (enter_nvfbc_context(&data->nvfbc)) {
+		destroy_capture_session(&data->nvfbc);
+		create_capture_session(&data->nvfbc, data->obs.settings);
+		leave_nvfbc_context(&data->nvfbc);
+	}
+
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
 }
+
+struct obs_source_info nvfbc_source = {
+	.id = "nvfbc-source",
+	.type = OBS_SOURCE_TYPE_INPUT,
+	.get_name = get_name,
+	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW | OBS_SOURCE_DO_NOT_DUPLICATE,
+
+	.create = create,
+	.destroy = destroy,
+	.video_render = render,
+	.get_width = get_width,
+	.get_height = get_height,
+
+	.get_defaults = get_defaults,
+	.get_properties = get_properties,
+	.show = show,
+	.hide = hide,
+	.update = update,
+};
 
 bool obs_module_load(void)
 {
-	PNVFBCCREATEINSTANCE NvFBCCreateInstance = NULL;
+	PNVFBCCREATEINSTANCE p_NvFBCCreateInstance = NULL;
 
-	dll = dlopen("libnvidia-fbc.so.1", RTLD_NOW);
-	if (dll == NULL) {
-		blog(LOG_ERROR, "%s", "Unable to load NvFCB library");
+	nvfbc_lib = os_dlopen(NVFBC_LIB_NAME);
+	if (nvfbc_lib == NULL) {
+		blog(LOG_ERROR, "%s", "Unable to load NvFBC library");
 		return false;
 	}
 
-	NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)dlsym(dll, "NvFBCCreateInstance");
-	if (NvFBCCreateInstance == NULL) {
-		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFCB library");
+	p_NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)os_dlsym(nvfbc_lib, "NvFBCCreateInstance");
+	if (p_NvFBCCreateInstance == NULL) {
+		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFBC library");
 		return false;
 	}
 
-	NVFBCSTATUS ret = NvFBCCreateInstance(&nvFBC);
+	NVFBCSTATUS ret = p_NvFBCCreateInstance(&nvFBC);
 	if (ret != NVFBC_SUCCESS) {
 		blog(LOG_ERROR, "%s", "Unable to create NvFBC instance");
 		return false;
 	}
 
-	struct obs_source_info info = {
-		.id = "nvfbc-source",
-		.type = OBS_SOURCE_TYPE_INPUT,
-		.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_DO_NOT_DUPLICATE,
+#if _WIN32
+	p_wglCopyImageSubDataNV = (PFNWGLCOPYIMAGESUBDATANVPROC)wglGetProcAddress("wglCopyImageSubDataNV");
+	if (p_wglCopyImageSubDataNV == NULL) {
+		blog(LOG_ERROR, "%s", "OpenGL extension WGL_NV_copy_image not supported");
+		return false;
+	}
+#elif defined(__linux__)
+	p_glXCopyImageSubDataNV = (PFNGLXCOPYIMAGESUBDATANVPROC)glXGetProcAddress((const GLubyte*)"glXCopyImageSubDataNV");
+	if (p_glXCopyImageSubDataNV == NULL) {
+		blog(LOG_ERROR, "%s", "OpenGL extension GLX_NV_copy_image not supported");
+		return false;
+	}
+#endif
 
-		.get_name = get_name,
-		.create = create,
-		.destroy = destroy,
-
-		.get_defaults = get_defaults,
-		.get_properties = get_properties,
-		.show = show,
-		.hide = hide,
-		.update = update,
-	};
-
-	obs_register_source(&info);
+	obs_register_source(&nvfbc_source);
 
 	return true;
 }
 
 void obs_module_unload(void)
 {
-	if (dll != NULL) {
-		dlclose(dll);
+	if (nvfbc_lib != NULL) {
+		os_dlclose(nvfbc_lib);
 	}
 }
