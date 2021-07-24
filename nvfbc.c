@@ -349,7 +349,7 @@ static bool capture_frame(data_nvfbc_t *data_nvfbc, GLuint *out_texture, NVFBC_F
 
 	NVFBC_TOGL_GRAB_FRAME_PARAMS grab_params = {
 		.dwVersion = NVFBC_TOGL_GRAB_FRAME_PARAMS_VER,
-		.dwFlags = NVFBC_TOGL_GRAB_FLAGS_NOWAIT_IF_NEW_FRAME_READY,
+		.dwFlags = NVFBC_TOGL_GRAB_FLAGS_NOWAIT,
 		.pFrameGrabInfo = out_info,
 		.dwTimeoutMs = 0
 	};
