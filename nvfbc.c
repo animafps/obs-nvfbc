@@ -19,10 +19,6 @@
  * along with obs-nvfbc. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#if !_WIN32 && !defined(__linux__)
-#error "Unsupported platform"
-#endif
-
 #define GL_GLEXT_PROTOTYPES
 #if _WIN32
 #define WGL_WGLEXT_PROTOTYPES 1
@@ -46,7 +42,7 @@
 #if _WIN32
 #include <GL/wgl.h>
 #include <GL/wglext.h>
-#elif defined(__linux__)
+#else
 #include <GL/glx.h>
 #include <GL/glxext.h>
 #endif
@@ -66,7 +62,7 @@ OBS_DECLARE_MODULE()
 static void *nvfbc_lib = NULL;
 #if _WIN32
 static PFNWGLCOPYIMAGESUBDATANVPROC p_wglCopyImageSubDataNV;
-#elif defined(__linux__)
+#else
 static PFNGLXCOPYIMAGESUBDATANVPROC p_glXCopyImageSubDataNV;
 #endif
 
@@ -84,7 +80,7 @@ typedef struct {
 	NVFBC_SESSION_HANDLE nvfbc_session;
 #if _WIN32
 	HGLRC nvfbc_ctx;
-#elif defined(__linux__)
+#else
 	GLXContext nvfbc_ctx;
 #endif
 	bool has_capture_session;
@@ -95,7 +91,7 @@ typedef struct {
 	pthread_mutex_t texture_mutex;
 	uint32_t width, height;
 	gs_texture_t *texture;
-#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+#if !defined(_WIN32) || !_WIN32
 	Display *dpy;
 #endif
 } data_texture_t;
@@ -133,7 +129,7 @@ static bool create_nvfbc_session(data_nvfbc_t *data_nvfbc)
 
 #if _WIN32
 	data_nvfbc->nvfbc_ctx = wglGetCurrentContext();
-#elif defined(__linux__)
+#else
 	data_nvfbc->nvfbc_ctx = glXGetCurrentContext();
 #endif
 	if (data_nvfbc->nvfbc_ctx == NULL) {
@@ -439,7 +435,7 @@ static bool update_texture(data_t *data)
 
 #if _WIN32
 	p_wglCopyImageSubDataNV(
-#elif defined(__linux__)
+#else
 	p_glXCopyImageSubDataNV(
 		data->tex.dpy,
 #endif
@@ -455,7 +451,7 @@ static bool update_texture(data_t *data)
 	if (glerr != GL_NO_ERROR) {
 #if _WIN32
 		blog(LOG_ERROR, "wglCopyImageSubDataNV GL error: %x", glerr);
-#elif defined(__linux__)
+#else
 		blog(LOG_ERROR, "glXCopyImageSubDataNV GL error: %x", glerr);
 #endif
 		goto tex_copy_failed;
@@ -489,7 +485,7 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 		blog(LOG_ERROR, "%s", "This plugin requires an OpenGL context");
 		goto not_opengl_err;
 	}
-#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+#if !defined(_WIN32) || !_WIN32
 	Display *dpy = glXGetCurrentDisplay();
 #endif
 	obs_leave_graphics();
@@ -511,7 +507,7 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 	data->obs.source = source;
 	data->obs.settings = settings;
 	data->nvfbc.nvfbc_session = -1;
-#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+#if !defined(_WIN32) || !_WIN32
 	data->tex.dpy = dpy;
 #endif
 
@@ -892,7 +888,7 @@ bool obs_module_load(void)
 		blog(LOG_ERROR, "%s", "Failed getting address of wglCopyImageSubDataNV function");
 		goto ext_error;
 	}
-#elif defined(__linux__)
+#else
 	if (!check_ext_available("GLX_NV_copy_image")) {
 		blog(LOG_ERROR, "%s", "OpenGL extension GLX_NV_copy_image not supported");
 		goto ext_error;
