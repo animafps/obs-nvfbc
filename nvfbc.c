@@ -23,6 +23,7 @@
 #error "Unsupported platform"
 #endif
 
+#define GL_GLEXT_PROTOTYPES
 #if _WIN32
 #define WGL_WGLEXT_PROTOTYPES 1
 #endif
@@ -41,6 +42,7 @@
 #include "NvFBC.h"
 
 #include <GL/gl.h>
+#include <GL/glext.h>
 #if _WIN32
 #include <GL/wgl.h>
 #include <GL/wglext.h>
@@ -788,43 +790,51 @@ bool obs_module_load(void)
 	nvfbc_lib = os_dlopen(NVFBC_LIB_NAME);
 	if (nvfbc_lib == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to load NvFBC library");
-		return false;
+		goto error;
 	}
 
 	p_NvFBCCreateInstance = (PNVFBCCREATEINSTANCE)os_dlsym(nvfbc_lib, "NvFBCCreateInstance");
 	if (p_NvFBCCreateInstance == NULL) {
 		blog(LOG_ERROR, "%s", "Unable to find NvFBCCreateInstance symbol in NvFBC library");
-		return false;
+		goto error;
 	}
 
 	NVFBCSTATUS ret = p_NvFBCCreateInstance(&nvFBC);
 	if (ret != NVFBC_SUCCESS) {
 		blog(LOG_ERROR, "%s", "Unable to create NvFBC instance");
-		return false;
+		goto error;
 	}
 
 #if _WIN32
 	p_wglCopyImageSubDataNV = (PFNWGLCOPYIMAGESUBDATANVPROC)wglGetProcAddress("wglCopyImageSubDataNV");
 	if (p_wglCopyImageSubDataNV == NULL) {
 		blog(LOG_ERROR, "%s", "OpenGL extension WGL_NV_copy_image not supported");
-		return false;
+		goto error;
 	}
 #elif defined(__linux__)
 	p_glXCopyImageSubDataNV = (PFNGLXCOPYIMAGESUBDATANVPROC)glXGetProcAddress((const GLubyte*)"glXCopyImageSubDataNV");
 	if (p_glXCopyImageSubDataNV == NULL) {
 		blog(LOG_ERROR, "%s", "OpenGL extension GLX_NV_copy_image not supported");
-		return false;
+		goto error;
 	}
 #endif
 
 	obs_register_source(&nvfbc_source);
 
 	return true;
+
+error:;
+	if (nvfbc_lib != NULL) {
+		os_dlclose(nvfbc_lib);
+		nvfbc_lib = NULL;
+	}
+	return false;
 }
 
 void obs_module_unload(void)
 {
 	if (nvfbc_lib != NULL) {
 		os_dlclose(nvfbc_lib);
+		nvfbc_lib = NULL;
 	}
 }
