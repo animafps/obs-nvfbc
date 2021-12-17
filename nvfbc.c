@@ -783,6 +783,79 @@ struct obs_source_info nvfbc_source = {
 	.update = update,
 };
 
+static bool check_ext_in_string(const char *str, const char *name)
+{
+	for (const char *space; (space = strchr(str, ' ')); str = space + 1) {
+		if (!strncmp(str, name, space - str)) {
+			return true;
+		}
+	}
+	return !strcmp(str, name);
+}
+
+static bool check_platform_ext_available(const char *name)
+{
+	const char *extensions;
+
+#if _WIN32
+	PFNWGLGETEXTENSIONSSTRINGARBPROC p_wglGetExtensionsStringARB = (PFNWGLGETEXTENSIONSSTRINGARBPROC)wglGetProcAddress("wglGetExtensionsStringARB");
+	if (!p_wglGetExtensionsStringARB) {
+		blog(LOG_ERROR, "wglGetExtensionsStringARB function not available");
+		return false;
+	}
+
+	HDC hDC = wglGetCurrentDC();
+	if (!hDC) {
+		blog(LOG_ERROR, "Cound not get DC from current OpenGL context");
+		return false;
+	}
+	extensions = p_wglGetExtensionsStringARB ? p_wglGetExtensionsStringARB(hDC) : NULL;
+#else
+	Display *dpy = glXGetCurrentDisplay();
+	if (!dpy) {
+		blog(LOG_ERROR, "Cound not get X11 Display from current OpenGL context");
+		return false;
+	}
+	extensions = glXQueryExtensionsString(dpy, DefaultScreen(dpy));
+#endif
+
+	if (!extensions) {
+		blog(LOG_ERROR, "Cound not get OpenGL platform extensions string");
+		return false;
+	}
+	return check_ext_in_string(extensions, name);
+}
+
+static bool check_fallback_ext_available(const char *name)
+{
+	GLint ext_count = 0;
+	glGetIntegerv(GL_NUM_EXTENSIONS, &ext_count);
+	if (!ext_count) {
+		const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
+		if (!extensions) {
+			blog(LOG_ERROR, "Cound not get OpenGL extensions string");
+			return false;
+		}
+		return check_ext_in_string(extensions, name);
+	}
+	for (GLint i = 0; i < ext_count; ++i) {
+		const GLubyte *ext = glGetStringi(GL_EXTENSIONS, i);
+		if (!ext) {
+			blog(LOG_ERROR, "Cound not get OpenGL extension #%i", i);
+		}
+		else if (!strcmp((const char *)ext, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool check_ext_available(const char *name)
+{
+	return check_platform_ext_available(name)
+		|| check_fallback_ext_available(name);
+}
+
 bool obs_module_load(void)
 {
 	PNVFBCCREATEINSTANCE p_NvFBCCreateInstance = NULL;
@@ -805,24 +878,38 @@ bool obs_module_load(void)
 		goto error;
 	}
 
+	obs_enter_graphics();
+
 #if _WIN32
+	if (!check_ext_available("WGL_NV_copy_image")) {
+		blog(LOG_ERROR, "%s", "OpenGL extension WGL_NV_copy_image not supported");
+		goto ext_error;
+	}
 	p_wglCopyImageSubDataNV = (PFNWGLCOPYIMAGESUBDATANVPROC)wglGetProcAddress("wglCopyImageSubDataNV");
 	if (p_wglCopyImageSubDataNV == NULL) {
-		blog(LOG_ERROR, "%s", "OpenGL extension WGL_NV_copy_image not supported");
-		goto error;
+		blog(LOG_ERROR, "%s", "Failed getting address of wglCopyImageSubDataNV function");
+		goto ext_error;
 	}
 #elif defined(__linux__)
+	if (!check_ext_available("GLX_NV_copy_image")) {
+		blog(LOG_ERROR, "%s", "OpenGL extension GLX_NV_copy_image not supported");
+		goto ext_error;
+	}
 	p_glXCopyImageSubDataNV = (PFNGLXCOPYIMAGESUBDATANVPROC)glXGetProcAddress((const GLubyte*)"glXCopyImageSubDataNV");
 	if (p_glXCopyImageSubDataNV == NULL) {
-		blog(LOG_ERROR, "%s", "OpenGL extension GLX_NV_copy_image not supported");
-		goto error;
+		blog(LOG_ERROR, "%s", "Failed getting address of glXCopyImageSubDataNV function");
+		goto ext_error;
 	}
 #endif
+
+	obs_leave_graphics();
 
 	obs_register_source(&nvfbc_source);
 
 	return true;
 
+ext_error:;
+	obs_leave_graphics();
 error:;
 	if (nvfbc_lib != NULL) {
 		os_dlclose(nvfbc_lib);
