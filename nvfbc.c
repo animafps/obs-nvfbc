@@ -72,8 +72,14 @@ static NVFBC_API_FUNCTION_LIST nvFBC = {
 
 typedef struct {
 	obs_source_t *source;
-	obs_data_t *settings;
 } data_obs_t;
+
+typedef struct {
+	int screen;
+	bool show_cursor;
+	int fps;
+	bool push_model;
+} data_settings_t;
 
 typedef struct {
 	pthread_mutex_t session_mutex;
@@ -98,6 +104,7 @@ typedef struct {
 
 typedef struct {
 	data_obs_t obs;
+	data_settings_t settings;
 	data_nvfbc_t nvfbc;
 	data_texture_t tex;
 } data_t;
@@ -244,24 +251,22 @@ static bool get_nvfbc_status(NVFBC_SESSION_HANDLE session, NVFBC_GET_STATUS_PARA
 	return ret2;
 }
 
-static bool create_capture_session(data_nvfbc_t *data_nvfbc, obs_data_t *settings)
+static bool create_capture_session(data_nvfbc_t *data_nvfbc, data_settings_t *settings)
 {
 	if (data_nvfbc->has_capture_session) {
 		return false;
 	}
 
-	int screen = obs_data_get_int(settings, "screen");
-
 	NVFBC_CREATE_CAPTURE_SESSION_PARAMS cap_params = {
 		.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER,
 		.eCaptureType = NVFBC_CAPTURE_TO_GL,
-		.eTrackingType = screen == -1 ? NVFBC_TRACKING_SCREEN : NVFBC_TRACKING_OUTPUT,
-		.dwOutputId = screen,
-		.bWithCursor = obs_data_get_bool(settings, "show_cursor") ? NVFBC_TRUE : NVFBC_FALSE,
+		.eTrackingType = settings->screen == -1 ? NVFBC_TRACKING_SCREEN : NVFBC_TRACKING_OUTPUT,
+		.dwOutputId = settings->screen,
+		.bWithCursor = settings->show_cursor ? NVFBC_TRUE : NVFBC_FALSE,
 		.bDisableAutoModesetRecovery = NVFBC_FALSE,
 		.bRoundFrameSize = NVFBC_TRUE,
-		.dwSamplingRateMs = 1000.0 / obs_data_get_int(settings, "fps") + 0.5,
-		.bPushModel = obs_data_get_bool(settings, "push_model") ? NVFBC_TRUE : NVFBC_FALSE,
+		.dwSamplingRateMs = 1000.0 / settings->fps + 0.5,
+		.bPushModel = settings->push_model ? NVFBC_TRUE : NVFBC_FALSE,
 	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateCaptureSession(data_nvfbc->nvfbc_session, &cap_params);
@@ -492,6 +497,14 @@ nvfbc_lock_err:;
 	return false;
 }
 
+static void copy_settings(data_settings_t *settings, obs_data_t *obs_settings)
+{
+	settings->screen = obs_data_get_int(obs_settings, "screen");
+	settings->show_cursor = obs_data_get_bool(obs_settings, "show_cursor");
+	settings->fps = obs_data_get_int(obs_settings, "fps");
+	settings->push_model = obs_data_get_bool(obs_settings, "push_model");
+}
+
 static void* create(obs_data_t *settings, obs_source_t *source)
 {
 	obs_enter_graphics();
@@ -519,7 +532,7 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 	}
 
 	data->obs.source = source;
-	data->obs.settings = settings;
+	copy_settings(&data->settings, settings);
 	data->nvfbc.nvfbc_session = -1;
 #if !defined(_WIN32) || !_WIN32
 	data->tex.dpy = dpy;
@@ -730,7 +743,7 @@ static void show(void *p)
 	}
 
 	if (enter_nvfbc_context(&data->nvfbc)) {
-		create_capture_session(&data->nvfbc, data->obs.settings);
+		create_capture_session(&data->nvfbc, &data->settings);
 		leave_nvfbc_context(&data->nvfbc);
 	}
 
@@ -769,8 +782,8 @@ static void update(void *p, obs_data_t *settings)
 
 	if (enter_nvfbc_context(&data->nvfbc)) {
 		destroy_capture_session(&data->nvfbc);
-		data->obs.settings = settings;
-		create_capture_session(&data->nvfbc, settings);
+		copy_settings(&data->settings, settings);
+		create_capture_session(&data->nvfbc, &data->settings);
 		leave_nvfbc_context(&data->nvfbc);
 	}
 
