@@ -440,12 +440,8 @@ static bool update_texture(data_t *data)
 #if _WIN32
 	p_wglCopyImageSubDataNV(
 #elif defined(__linux__)
-	Display *dpy = data->tex.dpy;
-	if (dpy == NULL) {
-		data->tex.dpy = dpy = glXGetCurrentDisplay();
-	}
 	p_glXCopyImageSubDataNV(
-		dpy,
+		data->tex.dpy,
 #endif
 		data->nvfbc.nvfbc_ctx, nvfbc_tex, data->nvfbc.togl_setup_params.dwTexTarget, 0, 0, 0, 0,
 		NULL, *(GLuint*)gs_texture_get_obj(data->tex.texture), GL_TEXTURE_2D, 0, 0, 0, 0,
@@ -493,6 +489,9 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 		blog(LOG_ERROR, "%s", "This plugin requires an OpenGL context");
 		goto not_opengl_err;
 	}
+#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+	Display *dpy = glXGetCurrentDisplay();
+#endif
 	obs_leave_graphics();
 #if !defined(_WIN32) || !_WIN32
 #if LIBOBS_API_VER >= MAKE_SEMANTIC_VERSION(27, 0, 0)
@@ -512,6 +511,9 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 	data->obs.source = source;
 	data->obs.settings = settings;
 	data->nvfbc.nvfbc_session = -1;
+#if (!defined(_WIN32) || !_WIN32) && defined(__linux__)
+	data->tex.dpy = dpy;
+#endif
 
 	int error = pthread_mutex_init(&data->nvfbc.session_mutex, NULL);
 	if (error != 0) {
