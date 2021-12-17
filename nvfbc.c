@@ -769,7 +769,8 @@ static void update(void *p, obs_data_t *settings)
 
 	if (enter_nvfbc_context(&data->nvfbc)) {
 		destroy_capture_session(&data->nvfbc);
-		create_capture_session(&data->nvfbc, data->obs.settings);
+		data->obs.settings = settings;
+		create_capture_session(&data->nvfbc, settings);
 		leave_nvfbc_context(&data->nvfbc);
 	}
 
