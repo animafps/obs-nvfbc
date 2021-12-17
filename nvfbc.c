@@ -250,11 +250,13 @@ static bool create_capture_session(data_nvfbc_t *data_nvfbc, obs_data_t *setting
 		return false;
 	}
 
+	int screen = obs_data_get_int(settings, "screen");
+
 	NVFBC_CREATE_CAPTURE_SESSION_PARAMS cap_params = {
 		.dwVersion = NVFBC_CREATE_CAPTURE_SESSION_PARAMS_VER,
 		.eCaptureType = NVFBC_CAPTURE_TO_GL,
-		.eTrackingType = NVFBC_TRACKING_OUTPUT,
-		.dwOutputId = obs_data_get_int(settings, "screen"),
+		.eTrackingType = screen == -1 ? NVFBC_TRACKING_SCREEN : NVFBC_TRACKING_OUTPUT,
+		.dwOutputId = screen,
 		.bWithCursor = obs_data_get_bool(settings, "show_cursor") ? NVFBC_TRUE : NVFBC_FALSE,
 		.bDisableAutoModesetRecovery = NVFBC_FALSE,
 		.bRoundFrameSize = NVFBC_TRUE,
@@ -699,6 +701,7 @@ screen_list:;
 	}
 
 	if (status_valid) {
+		obs_property_list_add_int(prop, "Entire Desktop", -1);
 		for (int i = 0; i < status_params.dwOutputNum; i++) {
 			obs_property_list_add_int(prop, status_params.outputs[i].name, status_params.outputs[i].dwId);
 		}
