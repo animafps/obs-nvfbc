@@ -363,12 +363,13 @@ static bool capture_frame(data_nvfbc_t *data_nvfbc, GLuint *out_texture, NVFBC_F
 	return true;
 }
 
+static bool need_texture_resize(data_texture_t *data_texture, uint32_t width, uint32_t height)
+{
+	return data_texture->texture == NULL || width != data_texture->width || height != data_texture->height;
+}
+
 static bool resize_texture(data_texture_t *data_texture, uint32_t width, uint32_t height)
 {
-	if (data_texture->texture != NULL && width == data_texture->width && height == data_texture->height) {
-		return true;
-	}
-
 	if (data_texture->texture != NULL) {
 		gs_texture_destroy(data_texture->texture);
 	}
@@ -429,8 +430,12 @@ static bool update_texture(data_t *data)
 		goto tex_lock_err;
 	}
 
-	if (!resize_texture(&data->tex, info.dwWidth, info.dwHeight)) {
-		goto tex_create_failed;
+	if (need_texture_resize(&data->tex, info.dwWidth, info.dwHeight)) {
+		if (!resize_texture(&data->tex, info.dwWidth, info.dwHeight)) {
+			goto tex_create_failed;
+		}
+	} else if (!info.bIsNewFrame) {
+		goto omit_tex_copy;
 	}
 
 #if _WIN32
@@ -460,6 +465,13 @@ static bool update_texture(data_t *data)
 	error = pthread_mutex_unlock(&data->tex.texture_mutex);
 	assert(error == 0);
 
+	return true;
+
+omit_tex_copy:;
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
+	error = pthread_mutex_unlock(&data->tex.texture_mutex);
+	assert(error == 0);
 	return true;
 
 tex_copy_failed:;
