@@ -47,6 +47,11 @@
 #include <GL/glxext.h>
 #endif
 
+#if !defined(_WIN32) || !_WIN32
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#endif
+
 #include <string.h>
 #include <assert.h>
 
@@ -66,6 +71,13 @@ static PFNWGLCOPYIMAGESUBDATANVPROC p_wglCopyImageSubDataNV;
 static PFNGLXCOPYIMAGESUBDATANVPROC p_glXCopyImageSubDataNV;
 #endif
 
+#if !defined(_WIN32) || !_WIN32
+Atom _NET_CURRENT_DESKTOP = None;
+Atom _NET_NUMBER_OF_DESKTOPS = None;
+Atom _NET_DESKTOP_NAMES = None;
+Atom UTF8_STRING = None;
+#endif
+
 static NVFBC_API_FUNCTION_LIST nvFBC = {
 	.dwVersion = NVFBC_VERSION
 };
@@ -79,6 +91,9 @@ typedef struct {
 	bool show_cursor;
 	int fps;
 	bool push_model;
+#if !defined(_WIN32) || !_WIN32
+	long desktop;
+#endif
 } data_settings_t;
 
 typedef struct {
@@ -97,16 +112,23 @@ typedef struct {
 	pthread_mutex_t texture_mutex;
 	uint32_t width, height;
 	gs_texture_t *texture;
-#if !defined(_WIN32) || !_WIN32
-	Display *dpy;
-#endif
 } data_texture_t;
+
+#if !defined(_WIN32) || !_WIN32
+typedef struct {
+	Display *dpy;
+	int visible_transition;
+} data_x11_t;
+#endif
 
 typedef struct {
 	data_obs_t obs;
 	data_settings_t settings;
 	data_nvfbc_t nvfbc;
 	data_texture_t tex;
+#if !defined(_WIN32) || !_WIN32
+	data_x11_t x11;
+#endif
 } data_t;
 
 static const char* get_name(void *type_data)
@@ -406,6 +428,37 @@ static bool resize_texture(data_texture_t *data_texture, uint32_t width, uint32_
 	return true;
 }
 
+#if !defined(_WIN32) || !_WIN32
+static long get_current_desktop(Display *dpy)
+{
+	Atom type;
+	int format;
+	unsigned long count, remaining;
+	unsigned char *data;
+	int status = XGetWindowProperty(dpy, DefaultRootWindow(dpy), _NET_CURRENT_DESKTOP, 0, 1, False, XA_CARDINAL, &type, &format, &count, &remaining, &data);
+	if (status != Success) {
+		return -1;
+	}
+	if (type != XA_CARDINAL || format != 32 || count != 1 || remaining != 0) {
+		XFree(data);
+		return -1;
+	}
+	long ret = *(long*)data;
+	XFree(data);
+	return ret;
+}
+
+static bool is_desktop_visible(data_t *data)
+{
+	if (data->settings.desktop == -1) {
+		return true;
+	}
+
+	long current_desktop = get_current_desktop(data->x11.dpy);
+	return current_desktop >= 0 && current_desktop == data->settings.desktop;
+}
+#endif
+
 static bool update_texture(data_t *data)
 {
 	int error = pthread_mutex_lock(&data->nvfbc.session_mutex);
@@ -417,6 +470,14 @@ static bool update_texture(data_t *data)
 	if (!data->nvfbc.has_capture_session) {
 		goto no_capture_session;
 	}
+
+#if !defined(_WIN32) || !_WIN32
+	/* Check desktop here to avoid capturing the desktop if not necessary. */
+	if (!is_desktop_visible(data)) {
+		data->x11.visible_transition = (data->settings.fps + 5) / -6;
+		goto desktop_hidden;
+	}
+#endif
 
 	if (!switch_to_nvfbc_context(&data->nvfbc)) {
 		goto enter_ctx_failed;
@@ -430,6 +491,28 @@ static bool update_texture(data_t *data)
 	}
 
 	switch_to_obs_context(&data->nvfbc);
+
+#if !defined(_WIN32) || !_WIN32
+	/* Wait a few frames to make sure the old desktop is never visible. */
+	if (data->x11.visible_transition + 1 < 0) {
+		if (info.bIsNewFrame == NVFBC_TRUE) {
+			++data->x11.visible_transition;
+		}
+		goto desktop_hidden;
+	}
+	if (data->x11.visible_transition + 1 == 0) {
+		if (info.bIsNewFrame == NVFBC_FALSE) {
+			goto desktop_hidden;
+		}
+		++data->x11.visible_transition;
+	}
+
+	/* Need to check again to avoid a "race condition". */
+	if (!is_desktop_visible(data)) {
+		data->x11.visible_transition = (data->settings.fps + 5) / -6;
+		goto desktop_hidden;
+	}
+#endif
 
 	error = pthread_mutex_lock(&data->tex.texture_mutex);
 	if (error != 0) {
@@ -449,7 +532,7 @@ static bool update_texture(data_t *data)
 	p_wglCopyImageSubDataNV(
 #else
 	p_glXCopyImageSubDataNV(
-		data->tex.dpy,
+		data->x11.dpy,
 #endif
 		data->nvfbc.nvfbc_ctx, nvfbc_tex, data->nvfbc.togl_setup_params.dwTexTarget, 0, 0, 0, 0,
 		NULL, *(GLuint*)gs_texture_get_obj(data->tex.texture), GL_TEXTURE_2D, 0, 0, 0, 0,
@@ -481,6 +564,13 @@ omit_tex_copy:;
 	assert(error == 0);
 	return true;
 
+#if !defined(_WIN32) || !_WIN32
+desktop_hidden:;
+	error = pthread_mutex_unlock(&data->nvfbc.session_mutex);
+	assert(error == 0);
+	return true;
+#endif
+
 tex_copy_failed:;
 tex_create_failed:;
 	error = pthread_mutex_unlock(&data->tex.texture_mutex);
@@ -503,6 +593,9 @@ static void copy_settings(data_settings_t *settings, obs_data_t *obs_settings)
 	settings->show_cursor = obs_data_get_bool(obs_settings, "show_cursor");
 	settings->fps = obs_data_get_int(obs_settings, "fps");
 	settings->push_model = obs_data_get_bool(obs_settings, "push_model");
+#if !defined(_WIN32) || !_WIN32
+	settings->desktop = obs_data_get_int(obs_settings, "desktop");
+#endif
 }
 
 static void* create(obs_data_t *settings, obs_source_t *source)
@@ -535,7 +628,7 @@ static void* create(obs_data_t *settings, obs_source_t *source)
 	copy_settings(&data->settings, settings);
 	data->nvfbc.nvfbc_session = -1;
 #if !defined(_WIN32) || !_WIN32
-	data->tex.dpy = dpy;
+	data->x11.dpy = dpy;
 #endif
 
 	int error = pthread_mutex_init(&data->nvfbc.session_mutex, NULL);
@@ -605,6 +698,10 @@ static void render(void *p, gs_effect_t *effect)
 		goto tex_upd_err;
 	}
 
+	if (!data->tex.texture) {
+		goto no_texture;
+	}
+
 	effect = obs_get_base_effect(OBS_EFFECT_OPAQUE);
 	gs_blend_state_push();
 	gs_reset_blend_state();
@@ -638,6 +735,7 @@ no_image:;
 	assert(error == 0);
 tex_lock_err:;
 	gs_blend_state_pop();
+no_texture:;
 tex_upd_err:;
 	return;
 }
@@ -669,7 +767,59 @@ static void get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "fps", 60);
 	obs_data_set_default_bool(settings, "show_cursor", true);
 	obs_data_set_default_bool(settings, "push_model", true);
+#if !defined(_WIN32) || !_WIN32
+	obs_data_set_default_int(settings, "desktop", -1);
+#endif
 }
+
+#if !defined(_WIN32) || !_WIN32
+static long get_desktop_count(Display *dpy)
+{
+	Atom type;
+	int format;
+	unsigned long count, remaining;
+	unsigned char *data;
+	int status = XGetWindowProperty(dpy, DefaultRootWindow(dpy), _NET_NUMBER_OF_DESKTOPS, 0, 1, False, XA_CARDINAL, &type, &format, &count, &remaining, &data);
+	if (status != Success) {
+		return -1;
+	}
+	if (type != XA_CARDINAL || format != 32 || count != 1 || remaining != 0) {
+		XFree(data);
+		return -1;
+	}
+	long ret = *(long*)data;
+	XFree(data);
+	return ret;
+}
+
+static unsigned long get_desktop_names(Display *dpy, char **names)
+{
+	if (_NET_DESKTOP_NAMES == None || UTF8_STRING == None) {
+		return 0;
+	}
+	Atom type;
+	int format;
+	unsigned long count, remaining;
+	unsigned char *data;
+	int status = XGetWindowProperty(dpy, DefaultRootWindow(dpy), _NET_DESKTOP_NAMES, 0, (long)((unsigned long)-1 >> 1), False, UTF8_STRING, &type, &format, &count, &remaining, &data);
+	if (status != Success) {
+		return 0;
+	}
+	if (type != UTF8_STRING || format != 8 || remaining != 0) {
+		XFree(data);
+		return 0;
+	}
+	*names = (char *)data;
+	return count;
+}
+
+static void free_desktop_names(char *names)
+{
+	if (names) {
+		XFree(names);
+	}
+}
+#endif
 
 static obs_properties_t* get_properties(void *p)
 {
@@ -723,6 +873,49 @@ screen_list:;
 	obs_properties_add_int(props, "fps", "FPS", 1, 120, 1);
 	obs_properties_add_bool(props, "show_cursor", "Cursor");
 	obs_properties_add_bool(props, "push_model", "Use Push Model");
+
+#if !defined(_WIN32) || !_WIN32
+	prop = obs_properties_add_list(props, "desktop", "Desktop", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	if (prop == NULL) {
+		goto screen_lst_alloc_err;
+	}
+
+	obs_property_list_add_int(prop, "All Desktops", -1);
+	Display *dpy = data->x11.dpy;
+	long desktop_count;
+	if (_NET_CURRENT_DESKTOP != None && _NET_NUMBER_OF_DESKTOPS != None
+			&& (desktop_count = get_desktop_count(dpy)) > 0 && get_current_desktop(dpy) >= 0) {
+		char *desktop_names;
+		long desktop_names_len = get_desktop_names(dpy, &desktop_names);
+		char *p = desktop_names;
+
+		for (int i = 0; i < desktop_count; i++) {
+			size_t remaining_len;
+			if (p) {
+				remaining_len = desktop_names_len - (p - desktop_names);
+				if (!remaining_len) {
+					p = NULL;
+				}
+			}
+
+			char text[64];
+			if (p && *p) {
+				snprintf(text, sizeof(text), "Desktop %i (%.*s)", i + 1, (int)remaining_len, p);
+			} else {
+				snprintf(text, sizeof(text), "Desktop %i", i + 1);
+			}
+			obs_property_list_add_int(prop, text, i);
+
+			if (p) {
+				p = memchr(p, '\0', remaining_len) + 1;
+			}
+		}
+
+		free_desktop_names(desktop_names);
+	} else {
+		obs_property_set_enabled(prop, false);
+	}
+#endif
 
 	return props;
 
@@ -906,6 +1099,13 @@ bool obs_module_load(void)
 	}
 
 	obs_enter_graphics();
+
+#if !defined(_WIN32) || !_WIN32
+	_NET_CURRENT_DESKTOP = XInternAtom(glXGetCurrentDisplay(), "_NET_CURRENT_DESKTOP", False);
+	_NET_NUMBER_OF_DESKTOPS = XInternAtom(glXGetCurrentDisplay(), "_NET_NUMBER_OF_DESKTOPS", False);
+	_NET_DESKTOP_NAMES = XInternAtom(glXGetCurrentDisplay(), "_NET_DESKTOP_NAMES", False);
+	UTF8_STRING = XInternAtom(glXGetCurrentDisplay(), "UTF8_STRING", False);
+#endif
 
 #if _WIN32
 	if (!check_ext_available("WGL_NV_copy_image")) {
