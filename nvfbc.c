@@ -91,6 +91,7 @@ typedef struct {
 	bool show_cursor;
 	int fps;
 	bool push_model;
+	bool direct_capture;
 #if !defined(_WIN32) || !_WIN32
 	long desktop;
 #endif
@@ -289,6 +290,7 @@ static bool create_capture_session(data_nvfbc_t *data_nvfbc, data_settings_t *se
 		.bRoundFrameSize = NVFBC_TRUE,
 		.dwSamplingRateMs = 1000.0 / settings->fps + 0.5,
 		.bPushModel = settings->push_model ? NVFBC_TRUE : NVFBC_FALSE,
+		.bAllowDirectCapture = settings->direct_capture ? NVFBC_TRUE : NVFBC_FALSE,
 	};
 
 	NVFBCSTATUS ret = nvFBC.nvFBCCreateCaptureSession(data_nvfbc->nvfbc_session, &cap_params);
@@ -593,6 +595,7 @@ static void copy_settings(data_settings_t *settings, obs_data_t *obs_settings)
 	settings->show_cursor = obs_data_get_bool(obs_settings, "show_cursor");
 	settings->fps = obs_data_get_int(obs_settings, "fps");
 	settings->push_model = obs_data_get_bool(obs_settings, "push_model");
+	settings->direct_capture = obs_data_get_bool(obs_settings, "direct_capture");
 #if !defined(_WIN32) || !_WIN32
 	settings->desktop = obs_data_get_int(obs_settings, "desktop");
 #endif
@@ -767,6 +770,7 @@ static void get_defaults(obs_data_t *settings)
 	obs_data_set_default_int(settings, "fps", 60);
 	obs_data_set_default_bool(settings, "show_cursor", true);
 	obs_data_set_default_bool(settings, "push_model", true);
+	obs_data_set_default_bool(settings, "direct_capture", false);
 #if !defined(_WIN32) || !_WIN32
 	obs_data_set_default_int(settings, "desktop", -1);
 #endif
@@ -873,6 +877,7 @@ screen_list:;
 	obs_properties_add_int(props, "fps", "FPS", 1, 120, 1);
 	obs_properties_add_bool(props, "show_cursor", "Cursor");
 	obs_properties_add_bool(props, "push_model", "Use Push Model");
+	obs_properties_add_bool(props, "direct_capture", "Use Direct Capture");
 
 #if !defined(_WIN32) || !_WIN32
 	prop = obs_properties_add_list(props, "desktop", "Desktop", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
