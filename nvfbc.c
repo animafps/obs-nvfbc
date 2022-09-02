@@ -890,7 +890,7 @@ screen_list:;
 	long desktop_count;
 	if (_NET_CURRENT_DESKTOP != None && _NET_NUMBER_OF_DESKTOPS != None
 			&& (desktop_count = get_desktop_count(dpy)) > 0 && get_current_desktop(dpy) >= 0) {
-		char *desktop_names;
+		char *desktop_names = NULL;
 		long desktop_names_len = get_desktop_names(dpy, &desktop_names);
 		char *p = desktop_names;
 
