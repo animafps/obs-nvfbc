@@ -1083,6 +1083,11 @@ static bool check_ext_available(const char *name)
 
 bool obs_module_load(void)
 {
+	if (obs_get_version() >> 24 >= 28) {
+		blog(LOG_ERROR, "NvFBC is defunct on OBS version >= 28. Abort.");
+		return false;
+	}
+
 	PNVFBCCREATEINSTANCE p_NvFBCCreateInstance = NULL;
 
 	nvfbc_lib = os_dlopen(NVFBC_LIB_NAME);
