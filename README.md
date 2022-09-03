@@ -2,6 +2,8 @@
 
 OBS Studio source plugin using NVIDIA's FBC API for Linux.
 
+**NOTE: This plugin is no longer functional since OBS Studio v28.** 
+
 ## Requirements
 
 **NVIDIA Linux drivers 410.66 or newer**
