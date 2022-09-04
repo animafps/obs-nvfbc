@@ -2,7 +2,7 @@
 
 OBS Studio source plugin using NVIDIA's FBC API for Linux.
 
-**NOTE: This plugin is no longer functional since OBS Studio v28.** 
+**NOTE: This plugin is no longer functional since OBS Studio v28. This is a technical limitation because of the removal of GLX code in OBS. Unless NVIDIA ports NvFBC from GLX to EGL I think there is nothing we can do. Feel free to investigate though.** 
 
 ## Requirements
 
