@@ -8,9 +8,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3
-      - run: |
-          apt update
-          apt install -y gcc meson ninja-build libobs-dev pkg-config mesa-common-dev
+      - uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: gcc meson ninja-build libobs-dev pkg-config mesa-common-dev
+          version: 1.0
       - run: |
           export LDFLAGS=-static-libgcc
           meson --buildtype=release --strip build
