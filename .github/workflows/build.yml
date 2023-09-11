@@ -1,0 +1,18 @@
+name: Build
+
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3
+      - run: |
+          export LDFLAGS=-static-libgcc
+          meson --buildtype=release --strip build
+          ninja -C build
+      - uses: actions/upload-artifact@83fd05a356d7e2593de66fc9913b3002723633cb # v3
+        with:
+          name: nvfbc.so
+          path: build/nvfbc.so
