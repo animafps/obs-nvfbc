@@ -8,10 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@ac593985615ec2ede58e132d2e21d2b1cbd6127c # v3
-      - uses: actions/setup-python@v1
-        with:
-          python-version: "3.x"
-      - run: pip install meson ninja
+      - run: |
+          apt update
+          apt install -y gcc meson ninja-build libobs-dev pkg-config mesa-common-dev
       - run: |
           export LDFLAGS=-static-libgcc
           meson --buildtype=release --strip build
